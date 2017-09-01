@@ -20,12 +20,28 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <time.h>
 
 #include <string>
 #include <vector>
 
 #include "zlib.h"
 
+typedef enum
+{
+	MQLOG_DEBUG = 0,
+	MQLOG_VERBOSE,
+	MQLOG_NOTICE,
+	MQLOG_WARNING,
+	MQLOG_ERROR
+} MQLogLevel;
+
+//mdy by lin.qiongshan, 2016年8月30日11:38:02, G_MQLOGLEVEL 不应该定义在头文件中
+//	这回导致所有引用 UtilAll.h 的 cpp 文件定义了一个 static 的变量 G_MQLOGLEVEL，每个 cpp 文件中 G_MQLOGLEVEL 变量都不相同，导致其它地方调用 UtilAll::setLogLevel 或 ClientConfig::setLogLevel 不是对整体生效
+//  新增 UtilAll.cpp ，定义实现，全局变量等（常量仍可放在头文件中）
+//static int G_MQLOGLEVEL = getenv("MQLOGLEVEL")?atoi(getenv("MQLOGLEVEL")) : MQLOG_NOTICE;
+extern int G_MQLOGLEVEL;
+    
 const std::string WHITESPACE=" \t\r\n";
 const int CHUNK = 8192;
 
@@ -36,292 +52,32 @@ const int CHUNK = 8192;
 class UtilAll
 {
 public:
-	static int Split(std::vector<std::string>& out,const std::string& in,const std::string& delimiter )
-	{
-		std::string::size_type left=0;
-		for(size_t i=1; i< in.size(); i++)
-		{
-			std::string::size_type right = in.find(delimiter,left);
-
-			if (right == std::string::npos)
-			{
-				break;
-			}
-
-			out.push_back(in.substr(left,right-left));
-
-			left = right+delimiter.length();
-		}
-
-		out.push_back(in.substr(left));
-
-		return out.size();
-	}
+	static int Split(std::vector<std::string>& out, const std::string& in, const std::string& delimiter);
 	
-	static int Split(std::vector<std::string>& out,const std::string& in,const char delimiter )
-	{
-		std::string::size_type left=0;
-		for(size_t i=1; i< in.size(); i++)
-		{
-			std::string::size_type right = in.find(delimiter,left);
+	static int Split(std::vector<std::string>& out, const std::string& in, const char delimiter);
 
-			if (right == std::string::npos)
-			{
-				break;
-			}
+	static std::string Trim(const std::string& str);
 
-			out.push_back(in.substr(left,right-left));
-
-			left = right+1;
-		}
-
-		out.push_back(in.substr(left));
-
-		return out.size();
-	}
-
-	static std::string Trim(const std::string& str)
-	{
-		if (str.empty())
-		{
-			return str;
-		}
-
-		std::string::size_type left = str.find_first_not_of(WHITESPACE);
-
-		if (left==std::string::npos)
-		{
-			return "";
-		}
-
-		std::string::size_type right = str.find_last_not_of(WHITESPACE);
-
-		if (right==std::string::npos)
-		{
-			return str.substr(left);
-		}
-
-		return str.substr(left,right + 1 -left);
-	}
-
-	static bool isBlank( const std::string& str )
-	{
-		if (str.empty())
-		{
-			return true;
-		}
-
-		std::string::size_type left = str.find_first_not_of(WHITESPACE);
-
-		if (left==std::string::npos)
-		{
-			return true;
-		}
-
-		return false;
-	}
+	static bool isBlank(const std::string& str);
 
 	static int availableProcessors()
 	{
 		return 4;
 	}
 
-	static int hashCode(void* pData, int len)
+	static int hashCode(const char* pData, int len)
 	{
-		return 0;
+	    int h = 0;
+
+        for (int i = 0; i < len; i++) {
+            h = 31*h + pData[i];
+        }
+		return h;
 	}
 
-	static int stringHashCode(const char* pData, int len)
-	{
-		int hash = 0;
-		if (pData !=NULL && len > 0)
-		{
-			for (int i = 0; i < len; i++)
-			{
-				hash = 31*hash + pData[i];
-			}
-		}
+	static bool compress(const char* pIn, int inLen, unsigned char** pOut, int* pOutLen, int level);
 
-		return hash;
-	}
-
-	static bool compress(const char* pIn, int inLen, unsigned char** pOut, int* pOutLen, int level)
-	{
-		int ret, flush;
-		int have;
-		z_stream strm;
-
-		unsigned char out[CHUNK];
-
-		/* allocate deflate state */
-		strm.zalloc = Z_NULL;
-		strm.zfree = Z_NULL;
-		strm.opaque = Z_NULL;
-		ret = deflateInit(&strm, level);
-		if (ret != Z_OK)
-		{
-			return false;
-		}
-
-		int outBufferLen = inLen;
-		unsigned char* outData = (unsigned char*)malloc(outBufferLen);
-
-
-		int left = inLen;
-		int used = 0;
-		int outDataLen = 0;
-		int outPos=0;
-
-		/* compress until end of buffer */
-		do
-		{
-			strm.avail_in = left > CHUNK ? CHUNK : left;
-			flush = left <= CHUNK ? Z_FINISH : Z_NO_FLUSH;
-			strm.next_in = (unsigned char*)pIn+used;
-			used += strm.avail_in;
-			left -= strm.avail_in;
-
-			/* run deflate() on input until output buffer not full, finish
-			compression if all of source has been read in */
-			do
-			{
-				strm.avail_out = CHUNK;
-				strm.next_out = out;
-				ret = deflate(&strm, flush);    /* no bad return value */
-				assert(ret != Z_STREAM_ERROR);  /* state not clobbered */
-				have = CHUNK - strm.avail_out;
-
-				if (outDataLen + have > outBufferLen)
-				{
-					outBufferLen = outDataLen + have;
-					outBufferLen <<= 1;
-					unsigned char* tmp = (unsigned char*)realloc(outData, outBufferLen);
-					if (!tmp)
-					{
-						free(outData);
-						return false;
-					}
-
-					outData = tmp;
-				}
-
-				memcpy(outData+outDataLen, out, have);
-				outDataLen += have;
-
-			} while (strm.avail_out == 0);
-			assert(strm.avail_in == 0);     /* all input will be used */
-
-			/* done when last data in file processed */
-		} while (flush != Z_FINISH);
-		assert(ret == Z_STREAM_END);        /* stream will be complete */
-
-		*pOutLen = outDataLen;
-		*pOut = outData;
-
-		/* clean up and return */
-		(void)deflateEnd(&strm);
-		return true;
-	}
-
-	static bool decompress(const char* pIn, int inLen, unsigned char** pOut, int* pOutLen)
-	{
-		int ret;
-		int have;
-		z_stream strm;
-
-		unsigned char out[CHUNK];
-
-		/* allocate inflate state */
-		strm.zalloc = Z_NULL;
-		strm.zfree = Z_NULL;
-		strm.opaque = Z_NULL;
-		strm.avail_in = 0;
-		strm.next_in = Z_NULL;
-		ret = inflateInit(&strm);
-		if (ret != Z_OK)
-		{
-			return false;
-		}
-
-		int outBufferLen = inLen<<2;
-		unsigned char* outData = (unsigned char*)malloc(outBufferLen);
-
-		int left = inLen;
-		int used = 0;
-		int outDataLen = 0;
-		int outPos=0;
-
-		/* decompress until deflate stream ends or end of buffer */
-		do 
-		{
-			strm.avail_in = left > CHUNK? CHUNK : left;
-			if (strm.avail_in <= 0)
-			{
-				break;
-			}
-
-			strm.next_in = (unsigned char*)pIn+used;
-			used += strm.avail_in;
-			left -= strm.avail_in;
-
-			/* run inflate() on input until output buffer not full */
-			do
-			{
-				strm.avail_out = CHUNK;
-				strm.next_out = out;
-				ret = inflate(&strm, Z_NO_FLUSH);
-				assert(ret != Z_STREAM_ERROR);  /* state not clobbered */
-				switch (ret)
-				{
-				case Z_NEED_DICT:
-					ret = Z_DATA_ERROR;     /* and fall through */
-				case Z_DATA_ERROR:
-				case Z_MEM_ERROR:
-					(void)inflateEnd(&strm);
-					free(outData);
-					return false;
-				}
-				have = CHUNK - strm.avail_out;
-
-				if (outDataLen + have > outBufferLen)
-				{
-					outBufferLen = outDataLen + have;
-					outBufferLen <<= 1;
-					unsigned char* tmp = (unsigned char*)realloc(outData, outBufferLen);
-					if (!tmp)
-					{
-						free(outData);
-						return false;
-					}
-
-					outData = tmp;
-				}
-
-				memcpy(outData+outDataLen, out, have);
-				outDataLen += have;
-
-			} while (strm.avail_out == 0);
-
-			/* done when inflate() says it's done */
-		} while (ret != Z_STREAM_END);
-
-		/* clean up and return */
-		(void)inflateEnd(&strm);
-
-		if (ret == Z_STREAM_END)
-		{
-			*pOutLen = outDataLen;
-			*pOut = outData;
-
-			return true;
-		}
-		else
-		{
-			free(outData);
-
-			return false;
-		}
-	}
+	static bool decompress(const char* pIn, int inLen, unsigned char** pOut, int* pOutLen);
 
 	static unsigned long long hexstr2ull(const char* str)
 	{
@@ -332,6 +88,61 @@ public:
 		return strtoull(str,&end,16);
 #endif
 	}
+
+#ifdef WIN32
+#define LOCALTIME_R(ti,tm)  localtime_s(tm,ti)
+#else
+#define LOCALTIME_R(ti,tm)  localtime_r(ti,tm)
+#endif
+    /* modified by yu.guangjie at 2015-08-17, reason: add begin*/
+
+	static void mqLogRaw(int level, const char *msg);
+
+    //去掉全路径的文件名的路径信息
+	static const char* GetFileName(const char* sFullFileName);
+
+	static void SetLogLevel(int iLevel);
+
+    static int GetLogLevel()
+    {
+        return G_MQLOGLEVEL;
+    }
+
+	//获取当前进程pid的字符串表述。目前只支持 Linux，Windows 平台将返回抛出异常
+	static std::string getPidStr();
+public:
+
 };
+
+#ifdef WIN32
+#define SNPRINTF _snprintf
+#else
+#define SNPRINTF snprintf
+#endif
+
+//lin.qiongshan, 2016年8月18日14:04:47, 原先的版本中，文件名和行号信息只在日志级别大于等于 MQLOG_WARNING 是才显式
+//	为了便于查看日志信息，此处先改为所有日志级别都输出文件名和行号
+#define ADD_MQLOG(__LogLvl, ...)  \
+    do  \
+    {   \
+        if (__LogLvl >= G_MQLOGLEVEL)   \
+        {   \
+        	char szTmp[1024] = {0}; \
+        	int iPos = 0; \
+        	if(__LogLvl >= MQLOG_DEBUG) \
+        	    iPos = sprintf(szTmp,"<%s:%d> ",UtilAll::GetFileName(__FILE__),__LINE__);\
+		    SNPRINTF(szTmp+iPos, 1024-iPos, __VA_ARGS__);  \
+			szTmp[sizeof(szTmp)-1]=0; \
+            UtilAll::mqLogRaw(__LogLvl, szTmp);   \
+        }   \
+    }   \
+    while(0)
+
+#define MqLogError(...)     ADD_MQLOG(MQLOG_ERROR, __VA_ARGS__)
+#define MqLogWarn(...)      ADD_MQLOG(MQLOG_WARNING, __VA_ARGS__)
+#define MqLogNotice(...)    ADD_MQLOG(MQLOG_NOTICE, __VA_ARGS__)
+#define MqLogVerb(...)      ADD_MQLOG(MQLOG_VERBOSE, __VA_ARGS__)
+#define MqLogDebug(...)     ADD_MQLOG(MQLOG_DEBUG, __VA_ARGS__)
+
 
 #endif

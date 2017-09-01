@@ -47,7 +47,8 @@ public:
 	long long maxOffset(const MessageQueue& mq);
 	long long minOffset(const MessageQueue& mq);
 	long long earliestMsgStoreTime(const MessageQueue& mq);
-	MessageExt viewMessage(const std::string& msgId);
+	//返回指针，需要由业务侧调用析构指针
+	MessageExt* viewMessage(const std::string& msgId);
 	QueryResult queryMessage(const std::string& topic,
 							 const std::string&  key,
 							 int maxNum,
@@ -102,7 +103,10 @@ public:
 
 	long long fetchConsumeOffset(MessageQueue& mq, bool fromStore);
 
-	std::set<MessageQueue*> fetchMessageQueuesInBalance(const std::string& topic);
+    void persistConsumeOffset(MessageQueue& mq);
+
+	//lin.qs, 原先返回的是 set<MessageQueue*>，指针引用内部可能变化的资源，不允许
+	std::set<MessageQueue> fetchMessageQueuesInBalance(const std::string& topic);
 	//MQPullConsumer end
 
 	OffsetStore* getOffsetStore();
@@ -110,6 +114,9 @@ public:
 
 	DefaultMQPullConsumerImpl* getDefaultMQPullConsumerImpl();
 
+	//add by lin.qiongshan, 2016-9-2，TCP 操作超时配置化
+	void setTcpTimeoutMilliseconds(int milliseconds);
+	int getTcpTimeoutMilliseconds();
 protected:
 	DefaultMQPullConsumerImpl* m_pDefaultMQPullConsumerImpl;
 

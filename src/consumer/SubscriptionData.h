@@ -28,25 +28,24 @@ public:
 	std::string getTopic()const;
 	void setTopic(const std::string& topic);
 
-	std::string getSubString();
+	std::string getSubString()const;
 	void setSubString(const std::string& subString);
 
-	std::set<std::string>& getTagsSet();
+	const std::set<std::string>& getTagsSet()const;
 	void setTagsSet(const std::set<std::string>& tagsSet);
 
-	long long getSubVersion();
+	long long getSubVersion()const;
 	void setSubVersion(long long subVersion);
 
-	std::set<int>& getCodeSet();
+	const std::set<int>& getCodeSet() const;
 	void setCodeSet(const std::set<int>& codeSet);
 
 	int hashCode();
 
-	void encode(std::string& outData);
-
 	bool operator==(const SubscriptionData& other);
 	bool operator<(const SubscriptionData& other)const;
 
+    SubscriptionData& operator=(const SubscriptionData& other);
 
 public:
 	static std::string SUB_ALL;
@@ -57,6 +56,9 @@ private:
 	std::set<std::string> m_tagsSet;
 	std::set<int> m_codeSet;
 	long long m_subVersion ;
+
+    friend class FilterAPI;
+    friend class PullAPIWrapper;
 };
 
 #endif

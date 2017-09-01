@@ -59,14 +59,15 @@ public:
 	void start();
 	void shutdown();
 	void sendHeartbeatToAllBrokerWithLock();
-	void updateTopicRouteInfoFromNameServer();
-	bool updateTopicRouteInfoFromNameServer(const std::string& topic);
+	void updateTopicRouteInfoFromNameServer(bool bLocked = false);
+	//mjx consumer_table_lock bug fix
+	bool updateTopicRouteInfoFromNameServer(const std::string& topic, bool bLocked = false);
 
 	/**
 	* 调用Name Server接口，根据Topic获取路由信息
 	*/
 	bool updateTopicRouteInfoFromNameServer(const std::string& topic, bool isDefault,
-											DefaultMQProducer* pDefaultMQProducer);
+											DefaultMQProducer* pDefaultMQProducer,bool bLocked = false);
 
 	static TopicPublishInfo* topicRouteData2TopicPublishInfo(const std::string& topic,
 			TopicRouteData& route);
@@ -119,7 +120,13 @@ public:
 	long long getBootTimestamp();
 	PullMessageService* getPullMessageService();
 	DefaultMQProducer* getDefaultMQProducer();
+	//mjx modify add
+	std::string findBrokerNameByTopic(const std::string& topic);
+	//mjx modify add
+	std::string findMasterBrokerAddrByTopicAndName(const std::string& topic,const std::string & brokerName);
 
+	void setTcpTimeoutMilliseconds(int milliseconds);
+	int getTcpTimeoutMilliseconds();
 private:
 	void sendHeartbeatToAllBroker();
 	HeartbeatData* prepareHeartbeatData();
@@ -170,6 +177,9 @@ private:
 	void logStatsPeriodicallyTask();
 
 private:
+	//add by lin.qiongshan, 2016-9-2，TCP 操作超时时间配置化
+	int m_tcpTimeoutMillseconds;
+
 	static long LockTimeoutMillis;
 	ClientConfig m_clientConfig;
 	int m_factoryIndex;
@@ -205,7 +215,7 @@ private:
 
 	kpr::Mutex m_mutex;
 	// 调用Name Server获取Topic路由信息时，加锁
-	kpr::Mutex m_lockNamesrv;
+	kpr::ToMutex m_lockNamesrv;
 
 	// 心跳与注销动作加锁
 	kpr::Mutex m_lockHeartbeat;

@@ -38,7 +38,8 @@
 
 DefaultMQPullConsumerImpl::DefaultMQPullConsumerImpl(DefaultMQPullConsumer* pDefaultMQPullConsumer)
 	:m_pDefaultMQPullConsumer(pDefaultMQPullConsumer),
-	m_serviceState(CREATE_JUST)
+	m_serviceState(CREATE_JUST),
+	m_tcpTimeoutMilliSeconds(MixAll::DEFAULT_TCP_TIMEOUT_MILLISECONDS)
 {
 	m_pRebalanceImpl = new RebalancePullImpl(this);
 }
@@ -59,14 +60,29 @@ long long DefaultMQPullConsumerImpl::fetchConsumeOffset(MessageQueue& mq, bool f
 	//TODO
 	makeSureStateOK();
 
-	return 0;
+    /* modified by yu.guangjie at 2015-10-19, reason: */
+    return m_pOffsetStore->readOffset(mq, fromStore ? READ_FROM_STORE : MEMORY_FIRST_THEN_STORE);
 }
 
-std::set<MessageQueue*> DefaultMQPullConsumerImpl::fetchMessageQueuesInBalance(const std::string& topic)
+std::set<MessageQueue> DefaultMQPullConsumerImpl::fetchMessageQueuesInBalance(const std::string& topic)
 {
-	//TODO
 	makeSureStateOK();
-	std::set<MessageQueue*> mqResult;
+	std::set<MessageQueue> mqResult;
+
+	//lin.qs, 2016-9-28，主题队列查询功能
+	if (!topic.empty()) 
+	{
+		std::map<MessageQueue, ProcessQueue*>& mqTable = this->m_pRebalanceImpl->getProcessQueueTable();
+		for (std::map<MessageQueue, ProcessQueue*>::const_iterator itor = mqTable.begin();
+			itor != mqTable.end();
+			++itor)
+		{
+			if (itor->first.getTopic() == topic) 
+			{
+				mqResult.insert(itor->first);
+			}
+		}
+	}
 
 	return mqResult;
 }
@@ -110,10 +126,32 @@ ConsumeFromWhere  DefaultMQPullConsumerImpl::consumeFromWhere()
 }
 
 std::set<SubscriptionData>  DefaultMQPullConsumerImpl::subscriptions()
-{
-	//TODO
-	std::set<SubscriptionData> result;
-	return result;
+{    
+    /* modified by yu.guangjie at 2015-08-20, reason: add subscriptions */
+    std::set<SubscriptionData> result;
+
+    std::set<std::string> topics = m_pDefaultMQPullConsumer->getRegisterTopics();
+    if (!topics.empty()) 
+    {
+        std::set<std::string>::iterator it = topics.begin();
+        for (; it != topics.end(); it++)
+    	{
+    		SubscriptionData* ms = NULL;
+            try 
+            {
+                ms = FilterAPI::buildSubscriptionData(groupName(), *it);
+            }
+            catch (MQException& e) 
+            {
+                MqLogWarn("parse subscription error: %s", e.what());
+            }
+            ms->setSubVersion(0);
+            result.insert(*ms);
+            delete ms;
+    	}
+    }
+
+    return result;
 }
 
 void DefaultMQPullConsumerImpl::doRebalance()
@@ -126,18 +164,58 @@ void DefaultMQPullConsumerImpl::doRebalance()
 
 void  DefaultMQPullConsumerImpl::persistConsumerOffset()
 {
-	//TODO
+	
+    /* modified by yu.guangjie at 2015-08-20, reason: add persistConsumerOffset */
+    try
+	{
+		makeSureStateOK();
+
+		std::set<MessageQueue> mqs;
+		std::map<MessageQueue, ProcessQueue*>& mqps = m_pRebalanceImpl->getProcessQueueTable();
+		std::map<MessageQueue, ProcessQueue*>::iterator it = mqps.begin();
+		for (;it!= mqps.end();it++)
+		{
+			mqs.insert(it->first);
+			MqLogDebug("queue{%s, %d} consumeoffset will be persist", it->first.getTopic().c_str(), it->first.getQueueId());
+		}
+
+		m_pOffsetStore->persistAll(mqs);
+	}
+	catch (MQException& e)
+	{
+	    MqLogWarn("group[%s] persistConsumerOffset exception: %s", 
+            m_pDefaultMQPullConsumer->getConsumerGroup().c_str(), e.what());
+	}
+
 }
 
 void  DefaultMQPullConsumerImpl::updateTopicSubscribeInfo(const std::string& topic, const std::set<MessageQueue>& info)
 {
-	//TODO
+    /* modified by yu.guangjie at 2015-08-20, reason: add updateTopicSubscribeInfo */
+    if(m_pRebalanceImpl->hasSubscribe(topic))
+    {
+        m_pRebalanceImpl->getTopicSubscribeInfoTable()[topic] = info;
+        MqLogNotice("Update subscribe topic[%s] ruoteinfo: MessageQueue=%d", 
+            topic.c_str(), info.size());
+    }
+	else
+	{
+		MqLogDebug("Topic[%s] is not subscribed, so do not update the subscribe info", topic.c_str());
+	}
 }
 
 bool  DefaultMQPullConsumerImpl::isSubscribeTopicNeedUpdate(const std::string& topic)
 {
-	//TODO
-	return false;
+    /* modified by yu.guangjie at 2015-08-20, reason: add isSubscribeTopicNeedUpdate */
+    if(m_pRebalanceImpl->hasSubscribe(topic))
+    {
+        std::map<std::string, std::set<MessageQueue> >& mqs=
+		    m_pRebalanceImpl->getTopicSubscribeInfoTable();
+
+		return mqs.find(topic)==mqs.end();
+    }
+
+    return false;
 }
 
 long long  DefaultMQPullConsumerImpl::maxOffset(const MessageQueue& mq)
@@ -209,9 +287,10 @@ void  DefaultMQPullConsumerImpl::sendMessageBack(MessageExt& msg, int delayLevel
 	try 
 	{
 		m_pMQClientFactory->getMQClientAPIImpl()->consumerSendMessageBack(msg,
-			m_pDefaultMQPullConsumer->getConsumerGroup(), 
-			delayLevel, 
-			3000);
+			m_pDefaultMQPullConsumer->getConsumerGroup(),
+			delayLevel,
+			//3000);	mdy by lin.qiongshan, 2016-9-2, 写死的时间改为从属性中获取
+			getTcpTimeoutMilliseconds());
 	}
 	catch (...)
 	{
@@ -233,6 +312,12 @@ void  DefaultMQPullConsumerImpl::shutdown()
 	case CREATE_JUST:
 		break;
 	case RUNNING:
+		/** Note by lin.qiongshan, 2017/5/24, 可能存在问题【待确定】 
+		
+			persistConsumerOffset() 方法用于同步消费进度到服务端，最终内部会调用到 m_pMQClientFactory
+			由于 persistConsumerOffset 是异步的，调用该方法后会立即执行到 m_pMQClientFactory->shutdown
+			如果 m_pMQClientFactory 先关闭，并释放了资源，然后 persistConsumerOffset 调用到 m_pMQClientFactory，会造成段错误
+		*/
 		persistConsumerOffset();
 		m_pMQClientFactory->unregisterConsumer(m_pDefaultMQPullConsumer->getConsumerGroup());
 		m_pMQClientFactory->shutdown();
@@ -252,7 +337,7 @@ void  DefaultMQPullConsumerImpl::updateConsumeOffset(MessageQueue& mq, long long
 	m_pOffsetStore->updateOffset(mq, offset, false);
 }
 
-MessageExt  DefaultMQPullConsumerImpl::viewMessage(const std::string& msgId)
+MessageExt*  DefaultMQPullConsumerImpl::viewMessage(const std::string& msgId)
 {
 	makeSureStateOK();
 
@@ -284,6 +369,11 @@ void  DefaultMQPullConsumerImpl::start()
 
 			checkConfig();
 			copySubscription();
+
+			if (m_pDefaultMQPullConsumer->getMessageModel() == CLUSTERING) 
+			{
+				m_pDefaultMQPullConsumer->changeInstanceNameToPID();
+			}
 
 			m_pMQClientFactory = MQClientManager::getInstance()->getAndCreateMQClientFactory(*m_pDefaultMQPullConsumer);
 
@@ -340,6 +430,20 @@ void  DefaultMQPullConsumerImpl::start()
 	default:
 		break;
 	}
+}
+
+void DefaultMQPullConsumerImpl::setTcpTimeoutMilliseconds(int milliseconds)
+{
+	m_tcpTimeoutMilliSeconds = milliseconds;
+
+	NULL == m_pMQClientFactory ?
+		NULL:
+		(m_pMQClientFactory->setTcpTimeoutMilliseconds(milliseconds), NULL);
+}
+
+int DefaultMQPullConsumerImpl::getTcpTimeoutMilliseconds()
+{
+	return m_tcpTimeoutMilliSeconds;
 }
 
 void  DefaultMQPullConsumerImpl::makeSureStateOK()
@@ -400,27 +504,29 @@ PullResult* DefaultMQPullConsumerImpl::pullSyncImpl(MessageQueue& mq,
 		SYNC, // 10
 		NULL// 11
 		);
-
-	return m_pPullAPIWrapper->processPullResult(mq, *pullResult, *subscriptionData);
+	//mdy by lin.qs@2017-4-1, subscriptionData 要删除，没有其它地方会删除这个对象了，不删除会内存泄漏
+	m_pPullAPIWrapper->processPullResult(mq, *pullResult, *subscriptionData);
+	delete subscriptionData;
+	subscriptionData = NULL;
+	return pullResult;
 }
 
 void  DefaultMQPullConsumerImpl::subscriptionAutomatically(const std::string& topic)
 {
-	std::map<std::string, SubscriptionData>& sd = m_pRebalanceImpl->getSubscriptionInner();
-	std::map<std::string, SubscriptionData>::iterator it = sd.find(topic);
-
-	if (it==sd.end())
-	{
-		try
+    /* modified by yu.guangjie at 2015-08-20, reason: */
+    if(!m_pRebalanceImpl->hasSubscribe(topic))
+    {
+        try
 		{
 			SubscriptionData* subscriptionData =
 				FilterAPI::buildSubscriptionData(topic, SubscriptionData::SUB_ALL);
-			sd[topic] = *subscriptionData;
+            m_pRebalanceImpl->subscribe(topic, *subscriptionData);
+			delete subscriptionData;
 		}
 		catch (...)
 		{
 		}
-	}
+    }
 }
 
 void  DefaultMQPullConsumerImpl::pullAsyncImpl(//
@@ -468,6 +574,7 @@ void  DefaultMQPullConsumerImpl::pullAsyncImpl(//
 			new DefaultMQPullConsumerImplCallback(*subscriptionData,
 			mq,this,pPullCallback);
 
+		//mdy by lin.qs@2017-4-1, subscriptionData 要删除，没有其它地方会删除这个对象了，不删除会内存泄漏
 		PullResult* pullResult = m_pPullAPIWrapper->pullKernelImpl(//
 			mq, // 1
 			subscriptionData->getSubString(), // 2
@@ -481,6 +588,8 @@ void  DefaultMQPullConsumerImpl::pullAsyncImpl(//
 			ASYNC, // 10
 			callback// 11
 			);
+		delete subscriptionData;
+		subscriptionData = NULL;
 	}
 	catch (MQBrokerException& /*e*/)
 	{
@@ -500,8 +609,10 @@ void  DefaultMQPullConsumerImpl::copySubscription()
 		for (;it!=registerTopics.end();it++)
 		{
 			SubscriptionData* subscriptionData =
-				FilterAPI::buildSubscriptionData(*it, SubscriptionData::SUB_ALL);
-			m_pRebalanceImpl->getSubscriptionInner()[*it]= *subscriptionData;
+				FilterAPI::buildSubscriptionData(*it, SubscriptionData::SUB_ALL);            
+            /* modified by yu.guangjie at 2015-08-20, reason: */
+            m_pRebalanceImpl->subscribe(*it, *subscriptionData);
+			delete subscriptionData;
 		}
 	}
 	catch (...)

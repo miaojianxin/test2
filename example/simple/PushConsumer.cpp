@@ -3,10 +3,24 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/signal.h>
+#include <unistd.h>
 #include <string>
 #include <iostream>
 #include <map>
 #include <set>
+
+#ifdef WIN32
+#include <WinSock2.h>
+#include <Windows.h>
+#include <sys/timeb.h>
+#else
+#include <sys/time.h>
+#include <pthread.h>
+#include <semaphore.h>
+#endif
 
 #include <DefaultMQPushConsumer.h>
 #include <MessageListener.h>
@@ -15,6 +29,8 @@
 #include <MessageQueue.h>
 #include <PullResult.h>
 #include <MQClientException.h>
+
+long long str2ll(const char *str);
 
 class MsgListener : public MessageListenerConcurrently
 {
@@ -32,34 +48,34 @@ public:
 	ConsumeConcurrentlyStatus consumeMessage(std::list<MessageExt*>& msgs,
 											ConsumeConcurrentlyContext& context)
 	{
-		std::cout<<"consumeMessage"<<std::endl;
+	    printf("consumeMessage() start...\n");
 		MessageExt* msg = msgs.front();
 		long long offset = msg->getQueueOffset();
 		std::string maxOffset = msg->getProperty(Message::PROPERTY_MAX_OFFSET);
 
-		long long diff = std::stoll(maxOffset) - offset;
+		long long diff = str2ll(maxOffset.c_str()) - offset;
 
 		if (diff > 100000)
 		{
-			// TODO 消息堆积情况的特殊处理
+			// 消息堆积情况的特殊处理
 			// return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;
 		}
 
 		std::list<MessageExt*>::iterator it = msgs.begin();
 
+        int i = 0;
 		for (;it != msgs.end();it++)
 		{
 			MessageExt* me = *it;
 			std::string str;
-			str.append("MsgId: ").append(me->getMsgId())
-			   .append(", Topic: ").append(me->getTopic())
-			   .append(", Broker: ").append(me->getBornHostString());
-			std::string body(me->getBody(), me->getBodyLen());
-			str.append(", Body: ").append(body);
-			std::cout<<str<<std::endl;
+			str.assign(me->getBody(),me->getBodyLen());
+            printf("Topic[%s],Msg[%d:%d]: %s\n", 
+                context.messageQueue.getTopic().c_str(), 
+                consumeTimes, ++i, str.c_str());
 		}
 
 		consumeTimes++;
+#if 0
 		if ((consumeTimes % 2) == 0)
 		{
 			return RECONSUME_LATER;
@@ -69,6 +85,7 @@ public:
 			context.delayLevelWhenNextConsume = 5;
 			return RECONSUME_LATER;
 		}
+#endif
 
 		return CONSUME_SUCCESS;
 	}
@@ -76,20 +93,97 @@ public:
 	int consumeTimes;
 };
 
+/* modified by yu.guangjie at 2015-08-26, reason: */
+
+class MsgOrderListener : public MessageListenerOrderly
+{
+public:
+	MsgOrderListener()
+	{
+		consumeTimes = 0;
+	}
+
+	~MsgOrderListener()
+	{
+
+	}
+
+    ConsumeOrderlyStatus consumeMessage(std::list<MessageExt*>& msgs,
+												ConsumeOrderlyContext& context)
+	{
+#ifdef WIN32
+		DWORD threadId = ::GetCurrentThreadId();
+#else
+		pthread_t threadId = pthread_self();
+#endif
+	    printf("[TID:%ld]order consumeMessage() Topic[%s],Broker[%s--%d]\n", 
+	        threadId, context.messageQueue.getTopic().c_str(), 
+            context.messageQueue.getBrokerName().c_str(),
+            context.messageQueue.getQueueId());
+
+		std::list<MessageExt*>::iterator it = msgs.begin();
+
+        int i = 0;
+		for (;it != msgs.end();it++)
+		{
+			MessageExt* me = *it;
+			std::string str;
+			str.assign(me->getBody(),me->getBodyLen());
+            printf("[TID:%ld] Msg[%d:%d]: %s\n", 
+                threadId, consumeTimes, ++i, str.c_str());
+		}
+
+		consumeTimes++;
+
+#if 0
+		if ((consumeTimes % 3) == 0)
+		{
+			return SUSPEND_CURRENT_QUEUE_A_MOMENT;
+		}
+#endif
+
+
+		return SUCCESS;
+	}
+
+	int consumeTimes;
+};
+
+
+bool g_bStop = false;
+
+static void sig_handler(const int sig) {
+    printf("Signal handled: %s.\n", strsignal(sig));
+    g_bStop = true;
+}
+
 int main(int argc, char* argv[])
 {
-	bool auto_fetch_ns = true;
-
-	if (argc >= 2) {
-		auto_fetch_ns = false;
+	if (argc<2)
+	{
+		printf("Usage:%s ip:port [order]\n",argv[0]);
+		return 0;
 	}
 
-	DefaultMQPushConsumer consumer("CG_Cpp_Push");
-	if (!auto_fetch_ns) {
-        printf("Usage:%s [ip:port]\n",argv[0]);
-        std::cout << "Now we are using specified ip:port name server address" << std::endl;
-		consumer.setNamesrvAddr(argv[1]);
-	}
+    bool bOrderConsumer = false;
+    if(argc > 2)
+    {
+        if(strcasecmp(argv[2], "order") == 0)
+        {
+            bOrderConsumer = true;
+        }
+    }
+
+    signal(SIGINT, sig_handler);
+
+	DefaultMQPushConsumer consumer("MyConsumerGroup");
+	consumer.setNamesrvAddr(argv[1]);
+
+    pid_t pid = getpid();
+    char szPid[20];
+    sprintf(szPid, "PID[%lu]", pid);
+    consumer.setInstanceName(szPid);
+    consumer.setConsumeMessageBatchMaxSize(3);
 
 	/**
 	* 订阅指定topic下所有消息
@@ -99,24 +193,31 @@ int main(int argc, char* argv[])
 	/**
 	* 订阅指定topic下tags分别等于TagA或TagC或TagD
 	*/
-	consumer.subscribe("TopicTest", "TagA || TagC || TagD");
+	//consumer.subscribe("TopicTest", "TagA || TagC || TagD");
+	consumer.subscribe("CCR", "TagA || TagC || TagD");
 
-	MsgListener* listener = new MsgListener();
+
+    MessageListener *listener = NULL;
+    if(bOrderConsumer)
+    {
+        listener = new MsgOrderListener();
+    }
+    else
+    {
+        listener = new MsgListener();
+    }
 
 	consumer.registerMessageListener(listener);
+
 	consumer.start();
+
+
+    while(!g_bStop)
+    {
+        sleep(1);
+    }
+    consumer.shutdown();
 	
-	while(1)
-	{
-		if (getchar()=='e'&&getchar()=='x'&&getchar()=='i'&&getchar()=='t')
-		{
-			break;
-		}
-
-	}
-
-	consumer.shutdown();
-
 	delete listener;
 
 	return 0;

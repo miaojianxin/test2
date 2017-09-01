@@ -1,5 +1,4 @@
 // dllmain.cpp : 定义 DLL 应用程序的入口点。
-#ifdef WIN32
 #include "windows.h"
 
 BOOL APIENTRY DllMain( HMODULE hModule,
@@ -17,4 +16,4 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 	}
 	return TRUE;
 }
-#endif
+

@@ -14,8 +14,8 @@
 * limitations under the License.
 */
 
-#if!defined __MESSAGELISTENER_H__
-#define __MESSAGELISTENER_H__
+#if!defined __ZMQ_MESSAGELISTENER_H__
+#define __ZMQ_MESSAGELISTENER_H__
 
 #include <limits.h>
 #include <list>

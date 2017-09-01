@@ -25,6 +25,7 @@
 #include "ConsumerStatManage.h"
 #include "MixAll.h"
 #include "AllocateMessageQueueStrategyInner.h"
+#include "DateInterface.h"
 
 class AllocateMessageQueueStrategy;
 
@@ -33,7 +34,7 @@ DefaultMQPushConsumer::DefaultMQPushConsumer()
 	m_consumerGroup = MixAll::DEFAULT_CONSUMER_GROUP;
 	m_messageModel = CLUSTERING;
 	m_consumeFromWhere = CONSUME_FROM_LAST_OFFSET;
-	m_pAllocateMessageQueueStrategy = new AllocateMessageQueueAveragely();
+    m_pAllocateMessageQueueStrategy = new AllocateMessageQueueAveragely();
 	m_pMessageListener = NULL;
 	m_consumeThreadMin = 10;
 	m_consumeThreadMax = 20;
@@ -42,8 +43,18 @@ DefaultMQPushConsumer::DefaultMQPushConsumer()
 	m_pullInterval = 0;
 	m_consumeMessageBatchMaxSize = 1;
 	m_pullBatchSize = 32;
+
+	//add by lin.qiongshan, 2016年8月29日17:30:45, 默认构造函数遗漏了这两个的添加（见 DefaultMQPushConsumer(const std::string& consumerGroup) 的修改）
 	m_pOffsetStore = NULL;
 	m_pDefaultMQPushConsumerImpl = new DefaultMQPushConsumerImpl(this);
+	
+	/* modify by liang.haibo 2016-10-09 
+     * Consumer第一次启动时，如果回溯消费，默认回溯到哪个时间点，数据格式如下，时间精度秒：<br>
+     * 20131223171201<br>
+     * 表示2013年12月23日17点12分01秒<br>
+     * 默认回溯到相对启动时间的半小时前
+	*/
+	m_consumeTimestamp = std::string(CDate::FormatGMTimeToString( CDate::GetSysDateTime() -  30 * 60, false));
 }
 
 DefaultMQPushConsumer::DefaultMQPushConsumer(const std::string& consumerGroup)
@@ -51,7 +62,8 @@ DefaultMQPushConsumer::DefaultMQPushConsumer(const std::string& consumerGroup)
 	m_consumerGroup = consumerGroup;
 	m_messageModel = CLUSTERING;
 	m_consumeFromWhere = CONSUME_FROM_LAST_OFFSET;
-	m_pAllocateMessageQueueStrategy = new AllocateMessageQueueAveragely();
+    /* modified by yu.guangjie at 2015-08-13, reason: */
+	m_pAllocateMessageQueueStrategy  = new AllocateMessageQueueAveragely();
 	m_pMessageListener = NULL;
 	m_consumeThreadMin = 10;
 	m_consumeThreadMax = 20;
@@ -60,13 +72,32 @@ DefaultMQPushConsumer::DefaultMQPushConsumer(const std::string& consumerGroup)
 	m_pullInterval = 0;
 	m_consumeMessageBatchMaxSize = 1;
 	m_pullBatchSize = 32;
-	m_pOffsetStore = NULL;
-	m_pDefaultMQPushConsumerImpl = new DefaultMQPushConsumerImpl(this);
+
+    //add by yugj
+    m_pOffsetStore = NULL;
+    m_pDefaultMQPushConsumerImpl = new DefaultMQPushConsumerImpl(this);
+	
+	/* modify by liang.haibo 2016-10-09 
+     * Consumer第一次启动时，如果回溯消费，默认回溯到哪个时间点，数据格式如下，时间精度秒：<br>
+     * 20131223171201<br>
+     * 表示2013年12月23日17点12分01秒<br>
+     * 默认回溯到相对启动时间的半小时前
+	*/
+	m_consumeTimestamp = std::string(CDate::FormatGMTimeToString( CDate::GetSysDateTime() -  30 * 60, false));
 }
 
 DefaultMQPushConsumer::~DefaultMQPushConsumer()
 {
-
+    if(m_pAllocateMessageQueueStrategy != NULL)
+    {
+        delete m_pAllocateMessageQueueStrategy;
+        m_pAllocateMessageQueueStrategy = NULL;
+    }
+    if(m_pDefaultMQPushConsumerImpl != NULL)
+    {
+        delete m_pDefaultMQPushConsumerImpl;
+        m_pDefaultMQPushConsumerImpl = NULL;
+    }
 }
 
 //MQAdmin
@@ -95,7 +126,7 @@ long long DefaultMQPushConsumer::earliestMsgStoreTime(const MessageQueue& mq)
 	return m_pDefaultMQPushConsumerImpl->earliestMsgStoreTime(mq);
 }
 
-MessageExt DefaultMQPushConsumer::viewMessage(const std::string& msgId)
+MessageExt* DefaultMQPushConsumer::viewMessage(const std::string& msgId)
 {
 	return m_pDefaultMQPushConsumerImpl->viewMessage(msgId);
 }
@@ -160,6 +191,18 @@ void DefaultMQPushConsumer::setConsumerGroup(const std::string& consumerGroup)
 	m_consumerGroup = consumerGroup;
 }
 
+/** modify by liang.haibo 2016-10-09
+** consume timestamp getter and setter 
+**/
+std::string DefaultMQPushConsumer::getConsumeTimestamp() {
+	return m_consumeTimestamp;
+}
+
+void DefaultMQPushConsumer::setConsumeTimestamp(const std::string& consumeTimestamp) {
+	m_consumeTimestamp = consumeTimestamp;
+}
+/* modify end liang.haibo 2016-10-09*/
+
 int DefaultMQPushConsumer::getConsumeThreadMax()
 {
 	return m_consumeThreadMax;
@@ -183,6 +226,18 @@ void DefaultMQPushConsumer::setConsumeThreadMin(int consumeThreadMin)
 DefaultMQPushConsumerImpl* DefaultMQPushConsumer::getDefaultMQPushConsumerImpl()
 {
 	return m_pDefaultMQPushConsumerImpl;
+}
+
+void DefaultMQPushConsumer::setTcpTimeoutMilliseconds(int milliseconds)
+{
+	NULL == m_pDefaultMQPushConsumerImpl ?
+		NULL:
+		(m_pDefaultMQPushConsumerImpl->setTcpTimeoutMilliseconds(milliseconds), NULL);
+}
+
+int DefaultMQPushConsumer::getTcpTimeoutMilliseconds()
+{
+	return m_pDefaultMQPushConsumerImpl->getTcpTimeoutMilliseconds();
 }
 
 MessageListener* DefaultMQPushConsumer::getMessageListener()

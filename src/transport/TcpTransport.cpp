@@ -21,9 +21,8 @@
 #include <memory.h>
 #include <errno.h>
 #include <assert.h>
-#include <string>
-#include <iostream>
 
+#include "UtilAll.h"
 #include "SocketUtil.h"
 #include "ScopedLock.h"
 
@@ -45,11 +44,6 @@ TcpTransport::TcpTransport(std::map<std::string, std::string>& config)
 		m_recvBufSize = atoi(it->second.c_str());
 	}
 
-	it = config.find("tcp.transport.enableSSL");
-	if (it != config.end()) {
-		enableSSL = (it->second == "true") || atoi(it->second.c_str()) != 0;
-	}
-
 	it = config.find("tcp.transport.shrinkCheckMax");
 	if (it != config.end())
 	{
@@ -64,8 +58,6 @@ TcpTransport::TcpTransport(std::map<std::string, std::string>& config)
 	m_pRecvBuf = (char*)malloc(m_recvBufSize);
 
 	m_state = (NULL == m_pRecvBuf) ? CLIENT_STATE_UNINIT : CLIENT_STATE_INITED;
-    ssl = nullptr;
-    sslContext = nullptr;
 }
 
 TcpTransport::~TcpTransport()
@@ -83,11 +75,6 @@ TcpTransport::~TcpTransport()
 		closesocket(m_sfd);
 		m_sfd = INVALID_SOCKET;
 	}
-
-    if (enableSSL) {
-        shutdownSSL(ssl);
-        SSL_CTX_free(sslContext);
-    }
 
 	SocketUninit();
 }
@@ -124,47 +111,20 @@ int TcpTransport::Connect(const std::string &strServerURL)
 	sa.sin_port = htons(port);
 
 	sa.sin_addr.s_addr = inet_addr(strAddr.c_str());
-
-    if (enableSSL) {
-        sslContext = initializeSSL();
-        ssl = SSL_new(sslContext);
-    }
-
 	m_sfd = (int)socket(AF_INET, SOCK_STREAM, 0);
+
+	if (MakeSocketNonblocking(m_sfd) == -1)
+	{
+		return CLIENT_ERROR_CONNECT;
+	}
 
 	if (SetTcpNoDelay(m_sfd) == -1)
 	{
 		closesocket(m_sfd);
 		return CLIENT_ERROR_CONNECT;
 	}
-
-	// handshake SSL.
-	if (enableSSL) {
-		SSL_set_fd(ssl, m_sfd);
-
-        if (connect(m_sfd, (struct sockaddr*) &sa, sizeof(sockaddr)) == -1) {
-            std::cout << "Unencrypted connection establishment failed" << std::endl;
-            return CLIENT_ERROR_CONNECT;
-        }
-
-		int return_code = 0;
-		if ((return_code = SSL_connect(ssl)) <= 0) {
-			// Log error of SSL connection.
-			ERR_print_errors_fp(stderr);
-			std::cout << "Connect Error Code: " << SSL_get_error(ssl, return_code) << std::endl;
-			return CLIENT_ERROR_CONNECT;
-		} else {
-			show_certificate(ssl);
-		}
-		// Log success of SSL handshake.
-	}
-
-	if (MakeSocketNonblocking(m_sfd) == -1)
-	{
-		return CLIENT_ERROR_CONNECT;
-	}
 	
-	if (!enableSSL && connect(m_sfd,(struct sockaddr*)&sa, sizeof(sockaddr)) == -1)
+	if (connect(m_sfd,(struct sockaddr*)&sa, sizeof(sockaddr)) == -1)
 	{
 		int err = NET_ERROR;
 		if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS)
@@ -210,12 +170,14 @@ int TcpTransport::Connect(const std::string &strServerURL)
 		}
 		else
 		{
+		    MqLogWarn("Connect to server[%s] error(%d): %s", strServerURL.c_str(), err, strerror(err));
 			return CLIENT_ERROR_CONNECT;
 		}
 	}
 
 	m_serverURL = strServerURL;
-    m_state = CLIENT_STATE_CONNECTED;
+	m_state = CLIENT_STATE_CONNECTED;
+
 	m_recvBufUsed = 0;
 
 	return CLIENT_ERROR_SUCCESS;
@@ -234,24 +196,19 @@ void TcpTransport::Close()
 	}
 }
 
-int TcpTransport::SendData(const char* pBuffer, size_t len,int timeOut)
+int TcpTransport::SendData(const char* pBuffer, int len,int timeOut)
 {
 	kpr::ScopedLock<kpr::Mutex> lock(m_sendLock);
 	return SendOneMsg(pBuffer,len,timeOut);
 }
 
-int TcpTransport::SendOneMsg(const char* pBuffer, size_t len, int nTimeOut)
+int TcpTransport::SendOneMsg(const char* pBuffer, int len, int nTimeOut)
 {
 	int pos = 0;
+
 	while (len > 0 && m_state == CLIENT_STATE_CONNECTED)
 	{
-		ssize_t ret = 0;
-		if (enableSSL) {
-			ret = SSL_write(ssl, pBuffer + pos, len);
-		} else {
-			ret = send(m_sfd, pBuffer + pos, len, 0);
-		}
-
+		int ret = send(m_sfd, pBuffer + pos, len, 0);
 		if (ret > 0)
 		{
 			len -= ret;
@@ -265,7 +222,7 @@ int TcpTransport::SendOneMsg(const char* pBuffer, size_t len, int nTimeOut)
 		else
 		{
 			int err = NET_ERROR;
-			if (err == WSAEWOULDBLOCK)
+			if (err == WSAEWOULDBLOCK || err == EAGAIN || err == EINTR)
 			{
 				fd_set wfd;
 				FD_ZERO(&wfd);
@@ -296,6 +253,7 @@ int TcpTransport::SendOneMsg(const char* pBuffer, size_t len, int nTimeOut)
 			}
 			else
 			{
+			    MqLogWarn("Send to server[%s] error(%d): %s", m_serverURL.c_str(), err, strerror(err));
 				Close();
 				break;
 			}
@@ -305,14 +263,9 @@ int TcpTransport::SendOneMsg(const char* pBuffer, size_t len, int nTimeOut)
 	return (len == 0) ? 0 : -1;
 }
 
-ssize_t TcpTransport::RecvMsg()
+int TcpTransport::RecvMsg()
 {
-	ssize_t ret = 0;
-	if (enableSSL) {
-		ret = SSL_read(ssl, m_pRecvBuf + m_recvBufUsed, m_recvBufSize - m_recvBufUsed);
-	} else {
-		ret = recv(m_sfd, m_pRecvBuf + m_recvBufUsed, m_recvBufSize - m_recvBufUsed, 0);
-	}
+	int ret = recv(m_sfd, m_pRecvBuf + m_recvBufUsed, m_recvBufSize - m_recvBufUsed, 0);
 
 	if (ret > 0)
 	{
@@ -320,13 +273,16 @@ ssize_t TcpTransport::RecvMsg()
 	}
 	else if (ret == 0)
 	{
+		//mjx modify add
+		MqLogWarn("RecvMsg:the connection is closed from server[%s]", m_serverURL.c_str());
 		Close();
 	}
 	else if (ret == -1)
 	{
 		int err = NET_ERROR;
-		if (err != WSAEWOULDBLOCK)
+		if (err != WSAEWOULDBLOCK && err != EAGAIN && err != EINTR)
 		{
+		    MqLogWarn("RecvMsg:Recv from server[%s] error(%d): %s", m_serverURL.c_str(), err, strerror(err));
 			Close();
 		}
 	}
@@ -334,7 +290,7 @@ ssize_t TcpTransport::RecvMsg()
 	return ret ;
 }
 
-bool TcpTransport::ResizeBuf(uint32_t nNewSize)
+bool TcpTransport::ResizeBuf(int nNewSize)
 {
 	char * newbuf = (char*)realloc(m_pRecvBuf,nNewSize);
 	if (!newbuf)
@@ -348,7 +304,7 @@ bool TcpTransport::ResizeBuf(uint32_t nNewSize)
 	return true;
 }
 
-void TcpTransport::TryShrink(uint32_t MsgLen)
+void TcpTransport::TryShrink(int MsgLen)
 {
 	m_shrinkMax = MsgLen > m_shrinkMax ? MsgLen : m_shrinkMax;
 	if (m_shrinkCheckCnt == 0)
@@ -365,18 +321,18 @@ void TcpTransport::TryShrink(uint32_t MsgLen)
 	}
 }
 
-uint32_t TcpTransport::GetMsgSize(const char * pBuf)
+int TcpTransport::GetMsgSize(const char * pBuf)
 {
-	uint32_t len = 0;
+	int len = 0;
 	memcpy(&len, pBuf, sizeof(int));
 
 	//由于长度值不包含自身，所以需要+4
 	return ntohl(len)+4;
 }
 
-ssize_t TcpTransport::RecvData(std::list<std::string*>& outDataList)
+int TcpTransport::RecvData(std::list<std::string*>& outDataList)
 {
-	ssize_t ret = RecvMsg();
+	int ret = RecvMsg();
 	ProcessData(outDataList);
 	return ret;
 }
@@ -385,7 +341,7 @@ void TcpTransport::ProcessData(std::list<std::string*>& outDataList)
 {
 	while (m_recvBufUsed > int(sizeof(int)))
 	{
-		uint32_t msgLen = 0;
+		int msgLen = 0;
 		msgLen = GetMsgSize(m_pRecvBuf);
 		if (msgLen > m_recvBufSize)
 		{
@@ -420,8 +376,7 @@ SOCKET TcpTransport::GetSocket()
 {
 	return m_sfd;
 }
-
-std::string& TcpTransport::GetServerURL()
+std::string TcpTransport::GetServerURL()
 {
-	return m_serverURL;
+    return m_serverURL;
 }

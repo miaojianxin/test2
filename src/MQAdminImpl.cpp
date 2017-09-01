@@ -29,6 +29,7 @@
 
 MQAdminImpl::MQAdminImpl(MQClientFactory* pMQClientFactory)
 {
+	m_tcpTimeoutMillseconds = MixAll::DEFAULT_TCP_TIMEOUT_MILLISECONDS;
 	m_pMQClientFactory = pMQClientFactory;
 }
 
@@ -42,7 +43,9 @@ void MQAdminImpl::createTopic(const std::string& key, const std::string& newTopi
 	try
 	{
 		MQClientAPIImpl* api = m_pMQClientFactory->getMQClientAPIImpl();
-		TopicRouteData* topicRouteData =api->getTopicRouteInfoFromNameServer(key, 1000 * 3);
+		//mdy by lin.qiongshan, 2016-9-2, 使用配置的 TCP 超时时间
+		//TopicRouteData* topicRouteData =api->getTopicRouteInfoFromNameServer(key, 1000 * 3);
+		TopicRouteData* topicRouteData = api->getTopicRouteInfoFromNameServer(key, getTcpTimoutMilliseconds());
 
 		std::list<BrokerData> brokerDataList = topicRouteData->getBrokerDatas();
 		if (!brokerDataList.empty())
@@ -68,7 +71,9 @@ void MQAdminImpl::createTopic(const std::string& key, const std::string& newTopi
 
 					try
 					{
-						api->createTopic(addr, key, topicConfig, 1000 * 3);
+						//mdy by lin.qiongshan, 2016-9-2, 使用配置的 TCP 超时时间
+						//api->createTopic(addr, key, topicConfig, 1000 * 3);
+						api->createTopic(addr, key, topicConfig, getTcpTimoutMilliseconds());
 					}
 					catch (MQClientException& e)
 					{
@@ -99,7 +104,7 @@ std::vector<MessageQueue>* MQAdminImpl::fetchPublishMessageQueues(const std::str
 	try
 	{
 		MQClientAPIImpl* api = m_pMQClientFactory->getMQClientAPIImpl();
-		TopicRouteData* topicRouteData =api->getTopicRouteInfoFromNameServer(topic, 1000 * 3);
+		TopicRouteData* topicRouteData =api->getTopicRouteInfoFromNameServer(topic, getTcpTimoutMilliseconds()/* 1000 * 3 mdy by lin.qiongshan, 2016-9-2，TCP 操作超时配置化 */);
 
 		if (topicRouteData != NULL)
 		{
@@ -118,6 +123,11 @@ std::vector<MessageQueue>* MQAdminImpl::fetchPublishMessageQueues(const std::str
 					ret->push_back(**it);
 				}
 
+				//mjx modify add
+				//这边有内存泄露
+				delete topicPublishInfo;
+				topicPublishInfo = NULL;
+				
 				return ret;
 			}
 		}
@@ -146,6 +156,8 @@ std::set<MessageQueue>* MQAdminImpl::fetchSubscribeMessageQueues(const std::stri
 			}
 			else
 			{
+                /* modified by yu.guangjie at 2015-08-13, reason: delete mqList*/
+			    delete mqList;
 				THROW_MQEXCEPTION(MQClientException,"Can not find Message Queue for this topic"+ topic,-1);
 			}
 		}
@@ -220,7 +232,8 @@ long long MQAdminImpl::minOffset(const MessageQueue& mq)
 		try
 		{
 			return m_pMQClientFactory->getMQClientAPIImpl()->getMinOffset(brokerAddr, mq.getTopic(),
-					mq.getQueueId(), 1000 * 3);
+					//mq.getQueueId(), 1000 * 3);	mdy by lin.qiongshan, 2016-9-2，TCP 操作超时配置化
+					mq.getQueueId(), getTcpTimoutMilliseconds());
 		}
 		catch (MQClientException e)
 		{
@@ -256,7 +269,7 @@ long long MQAdminImpl::earliestMsgStoreTime(const MessageQueue& mq)
 	THROW_MQEXCEPTION(MQClientException,"The broker[" + mq.getBrokerName() + "] not exist",-1);
 }
 
-MessageExt MQAdminImpl::viewMessage(const std::string& msgId)
+MessageExt* MQAdminImpl::viewMessage(const std::string& msgId)
 {
 	try
 	{
@@ -279,4 +292,14 @@ QueryResult MQAdminImpl::queryMessage(const std::string& topic,
 	QueryResult result(0,messageList);
 
 	return result;
+}
+
+void MQAdminImpl::setTcpTimeoutMillseconds(int milliseconds)
+{
+	m_tcpTimeoutMillseconds = milliseconds;
+}
+
+int MQAdminImpl::getTcpTimoutMilliseconds()
+{
+	return m_tcpTimeoutMillseconds;
 }

@@ -28,6 +28,7 @@
 #include "OffsetStore.h"
 #include "KPRUtil.h"
 #include "MixAll.h"
+#include "UtilAll.h"
 
 class LockMq : public kpr::TimerHandler
 {
@@ -40,7 +41,9 @@ public:
 
 	void OnTimeOut(unsigned int timerID)
 	{
+	    MqLogDebug("LockMq::OnTimeOut() begin ...");
 		m_pService->lockMQPeriodically();
+        MqLogDebug("LockMq::OnTimeOut() end ...");
 	}
 
 private:
@@ -72,6 +75,7 @@ void ConsumeMessageOrderlyService::start()
 
 void ConsumeMessageOrderlyService::shutdown()
 {
+    MqLogWarn("ConsumeMessageOrderlyService::shutdown()");
 	m_stoped = true;
 	m_pConsumeExecutor->Destroy();
 	m_scheduledExecutorService->Close();
@@ -105,10 +109,10 @@ class TryLockLaterAndReconsume : public kpr::TimerHandler
 {
 public:
 	TryLockLaterAndReconsume(ProcessQueue* pProcessQueue,
-		MessageQueue& messageQueue,
+		MessageQueue* pMessageQueue,
 		ConsumeMessageOrderlyService* pService)
 		:m_pProcessQueue(pProcessQueue),
-		m_messageQueue(messageQueue),
+		m_pMessageQueue(pMessageQueue),
 		m_pService(pService)
 	{
 
@@ -116,14 +120,17 @@ public:
 
 	void OnTimeOut(unsigned int timerID)
 	{
-		bool lockOK = m_pService->lockOneMQ(m_messageQueue);
+		bool lockOK = m_pService->lockOneMQ(*m_pMessageQueue);
+        MqLogNotice("TryLockLaterAndReconsume::OnTimeOut(): topic=%s,broker=%s--%d,lockOK=%s",
+            m_pMessageQueue->getTopic().c_str(),m_pMessageQueue->getBrokerName().c_str(),
+            m_pMessageQueue->getQueueId(),lockOK?"true":"false");
 		if (lockOK)
 		{
-			m_pService->submitConsumeRequestLater(m_pProcessQueue, m_messageQueue, 10);
+			m_pService->submitConsumeRequestLater(m_pProcessQueue, m_pMessageQueue, 10);
 		}
 		else
 		{
-			m_pService->submitConsumeRequestLater(m_pProcessQueue, m_messageQueue, 3000);
+			m_pService->submitConsumeRequestLater(m_pProcessQueue, m_pMessageQueue, 3000);
 		}
 
 		delete this;
@@ -131,15 +138,15 @@ public:
 
 private:
 	ProcessQueue* m_pProcessQueue;
-	MessageQueue m_messageQueue;
+	MessageQueue* m_pMessageQueue;
 	ConsumeMessageOrderlyService* m_pService;
 };
 
-void ConsumeMessageOrderlyService::tryLockLaterAndReconsume(MessageQueue& messageQueue,
+void ConsumeMessageOrderlyService::tryLockLaterAndReconsume(MessageQueue* pMessageQueue,
 															ProcessQueue* pProcessQueue,
 															long long delayMills)
 {
-	TryLockLaterAndReconsume* consume = new TryLockLaterAndReconsume(pProcessQueue, messageQueue,this);
+	TryLockLaterAndReconsume* consume = new TryLockLaterAndReconsume(pProcessQueue, pMessageQueue,this);
 
 	m_scheduledExecutorService->RegisterTimer(0, int(delayMills), consume, false);
 }
@@ -153,10 +160,10 @@ class SubmitConsumeRequestLaterOrderly : public kpr::TimerHandler
 {
 public:
 	SubmitConsumeRequestLaterOrderly(ProcessQueue* pProcessQueue,
-		MessageQueue& messageQueue,
+		MessageQueue* pMessageQueue,
 		ConsumeMessageOrderlyService* pService)
 		:m_pProcessQueue(pProcessQueue),
-		m_messageQueue(messageQueue),
+		m_pMessageQueue(pMessageQueue),
 		m_pService(pService)
 	{
 
@@ -164,20 +171,19 @@ public:
 
 	void OnTimeOut(unsigned int timerID)
 	{
-		std::list<MessageExt*> msgs;
-		m_pService->submitConsumeRequest(msgs,m_pProcessQueue,m_messageQueue,true);
+		m_pService->submitConsumeRequest(NULL,m_pProcessQueue,m_pMessageQueue,true);
 
 		delete this;
 	}
 
 private:
 	ProcessQueue* m_pProcessQueue;
-	MessageQueue& m_messageQueue;
+	MessageQueue* m_pMessageQueue;
 	ConsumeMessageOrderlyService* m_pService;
 };
 
 void ConsumeMessageOrderlyService::submitConsumeRequestLater(ProcessQueue* pProcessQueue,
-																MessageQueue& messageQueue,
+																MessageQueue* pMessageQueue,
 																long long suspendTimeMillis)
 {
 	long timeMillis = long (suspendTimeMillis);
@@ -189,22 +195,33 @@ void ConsumeMessageOrderlyService::submitConsumeRequestLater(ProcessQueue* pProc
 	{
 		timeMillis = 30000;
 	}
-
-	SubmitConsumeRequestLaterOrderly* sc = new SubmitConsumeRequestLaterOrderly(pProcessQueue, messageQueue,this);
+    MqLogVerb("submitConsumeRequestLater(): topic=%s,broker=%s--%d",
+            pMessageQueue->getTopic().c_str(),
+            pMessageQueue->getBrokerName().c_str(),
+            pMessageQueue->getQueueId());
+	SubmitConsumeRequestLaterOrderly* sc = new SubmitConsumeRequestLaterOrderly(pProcessQueue, pMessageQueue,this);
 
 	m_scheduledExecutorService->RegisterTimer(0, timeMillis, sc, false);
 }
 
-void ConsumeMessageOrderlyService::submitConsumeRequest(std::list<MessageExt*>& msgs,
+void ConsumeMessageOrderlyService::submitConsumeRequest(std::list<MessageExt*>* pMsgs,
 														ProcessQueue* pProcessQueue,
-														MessageQueue& messageQueue,
+														MessageQueue* pMessageQueue,
 														bool dispathToConsume)
 {
 	if (dispathToConsume)
 	{
-		ConsumeOrderlyRequest* consumeRequest = new ConsumeOrderlyRequest(pProcessQueue, messageQueue,this);
+	    MqLogVerb("submitConsumeRequest(),topic=%s,broker=%s--%d,msgs=%d",
+            pMessageQueue->getTopic().c_str(),pMessageQueue->getBrokerName().c_str(),
+            pMessageQueue->getQueueId(), (pMsgs!=NULL)?pMsgs->size():0);
+		ConsumeOrderlyRequest* consumeRequest = new ConsumeOrderlyRequest(pProcessQueue, pMessageQueue,this);
 		m_pConsumeExecutor->AddWork(consumeRequest);
 	}
+    /* modified by yu.guangjie at 2015-09-29, reason: clear pMsgs */
+    if(pMsgs != NULL)
+    {
+        pMsgs->clear();
+    }
 }
 
 void ConsumeMessageOrderlyService::updateCorePoolSize(int corePoolSize)
@@ -227,14 +244,14 @@ DefaultMQPushConsumerImpl* ConsumeMessageOrderlyService::getDefaultMQPushConsume
 	return m_pDefaultMQPushConsumerImpl;
 }
 
-bool ConsumeMessageOrderlyService::processConsumeResult( std::list<MessageExt*>& msgs,
+bool ConsumeMessageOrderlyService::processConsumeResult( std::list<MessageExt*>* pMsgs,
 	ConsumeOrderlyStatus status,
 	ConsumeOrderlyContext& context,
 	ConsumeOrderlyRequest& consumeRequest )
 {
 	bool continueConsume = true;
 	long long commitOffset = -1L;
-	int msgsSize = msgs.size();
+	int msgsSize = pMsgs->size();
 
 	// 非事务方式，自动提交
 	if (context.autoCommit)
@@ -243,7 +260,7 @@ bool ConsumeMessageOrderlyService::processConsumeResult( std::list<MessageExt*>&
 		{
 		case COMMIT:
 		case ROLLBACK:
-			//TODO log.warn("the message queue consume result is illegal, we think you want to ack these message {}",
+			// log.warn("the message queue consume result is illegal, we think you want to ack these message {}",
 			//	consumeRequest.getMessageQueue());
 		case SUCCESS:
 			commitOffset = consumeRequest.getProcessQueue()->commit();
@@ -251,7 +268,7 @@ bool ConsumeMessageOrderlyService::processConsumeResult( std::list<MessageExt*>&
 			getConsumerStat().consumeMsgOKTotal.fetchAndAdd(msgsSize);
 			break;
 		case SUSPEND_CURRENT_QUEUE_A_MOMENT:
-			consumeRequest.getProcessQueue()->makeMessageToCosumeAgain(msgs);
+			consumeRequest.getProcessQueue()->makeMessageToCosumeAgain(*pMsgs);
 			submitConsumeRequestLater(consumeRequest.getProcessQueue(),
 				consumeRequest.getMessageQueue(),
 				context.suspendCurrentQueueTimeMillis);
@@ -289,7 +306,7 @@ bool ConsumeMessageOrderlyService::processConsumeResult( std::list<MessageExt*>&
 			getConsumerStat().consumeMsgFailedTotal.fetchAndAdd(msgsSize);
 			break;
 		case SUSPEND_CURRENT_QUEUE_A_MOMENT:
-			consumeRequest.getProcessQueue()->makeMessageToCosumeAgain(msgs);
+			consumeRequest.getProcessQueue()->makeMessageToCosumeAgain(*pMsgs);
 			submitConsumeRequestLater(consumeRequest.getProcessQueue(),
 				consumeRequest.getMessageQueue(),
 				context.suspendCurrentQueueTimeMillis);
@@ -304,7 +321,7 @@ bool ConsumeMessageOrderlyService::processConsumeResult( std::list<MessageExt*>&
 
 	if (commitOffset >= 0)
 	{
-		m_pDefaultMQPushConsumerImpl->getOffsetStore()->updateOffset(consumeRequest.getMessageQueue(),
+		m_pDefaultMQPushConsumerImpl->getOffsetStore()->updateOffset(*consumeRequest.getMessageQueue(),
 			commitOffset, false);
 	}
 
@@ -322,10 +339,10 @@ DefaultMQPushConsumer* ConsumeMessageOrderlyService::getDefaultMQPushConsumer()
 }
 
 ConsumeOrderlyRequest::ConsumeOrderlyRequest(ProcessQueue* pProcessQueue,
-											 MessageQueue& messageQueue,
+											 MessageQueue* pMessageQueue,
 											 ConsumeMessageOrderlyService* pService)
 	:m_pProcessQueue(pProcessQueue),
-	m_messageQueue(messageQueue),
+	m_pMessageQueue(pMessageQueue),
 	m_pService(pService)
 {
 
@@ -339,36 +356,57 @@ ConsumeOrderlyRequest::~ConsumeOrderlyRequest()
 void ConsumeOrderlyRequest::Do()
 {
 	// 保证在当前Consumer内，同一队列串行消费
-	kpr::Mutex* objLock = m_pService->getMessageQueueLock().fetchLockObject(m_messageQueue);
+	kpr::Mutex* objLock = m_pService->getMessageQueueLock().fetchLockObject(*m_pMessageQueue);
 	{
 		kpr::ScopedLock<kpr::Mutex> lock(*objLock);
 
+        MqLogVerb("ConsumeOrderlyRequest::Do(),topic=%s,broker=%s--%d",
+            m_pMessageQueue->getTopic().c_str(),m_pMessageQueue->getBrokerName().c_str(),
+            m_pMessageQueue->getQueueId());
+
 		// 保证在Consumer集群，同一队列串行消费
-		if (m_pProcessQueue->isLocked() || !m_pProcessQueue->isLockExpired())
+        /* modified by yu.guangjie at 2015-08-26, reason: change || to && */
+		/** mdy by lin.qs, 2016-12-30, bug-fix 
+			这里逻辑要区分集群消费和广播消费。广播消费不需要锁队列
+		*/
+		if (m_pService->getDefaultMQPushConsumer()->getMessageModel() == BROADCASTING  
+			|| (m_pProcessQueue->isLocked() && !m_pProcessQueue->isLockExpired())
+			)
 		{
 			long long beginTime = GetCurrentTimeMillis();
 			for (bool continueConsume = true; continueConsume;)
 			{
-				if (m_pProcessQueue->isDropped())
+				if (m_pProcessQueue->isDroped())
 				{
-					//TODO log.info("the message queue not be able to consume, because it's droped {}",
-					//	this.messageQueue);
+					MqLogWarn("the message queue not be able to consume, because it's droped: "
+                        "[topic=%s, broker=%s, queue=%d]",
+					    m_pMessageQueue->getTopic().c_str(),
+					    m_pMessageQueue->getBrokerName().c_str(),
+					    m_pMessageQueue->getQueueId());
 					break;
 				}
-
-				if (!m_pProcessQueue->isLocked())
+				//mdy by lin.qs, 2016-12-30, 集群模式才需要锁队列消费，广播模式不需要
+				if (m_pService->getDefaultMQPushConsumer()->getMessageModel() == CLUSTERING 
+					&& !m_pProcessQueue->isLocked())
 				{
-					//TODO log.warn("the message queue not locked, so consume later, {}", this.messageQueue);
-					//ConsumeMessageOrderlyService.this.tryLockLaterAndReconsume(this.messageQueue,
-					//	this.processQueue, 10);
+					MqLogWarn("the message queue not locked, so consume later: "
+                        "[topic=%s, broker=%s, queue=%d]", 
+                        m_pMessageQueue->getTopic().c_str(),
+					    m_pMessageQueue->getBrokerName().c_str(),
+					    m_pMessageQueue->getQueueId());
+					m_pService->tryLockLaterAndReconsume(m_pMessageQueue, m_pProcessQueue, 10);
 					break;
 				}
-
-				if (m_pProcessQueue->isLockExpired())
+				//mdy by lin.qs, 2016-12-30, 集群模式才需要锁队列消费，广播模式不需要
+				if (m_pService->getDefaultMQPushConsumer()->getMessageModel() == CLUSTERING 
+					&& m_pProcessQueue->isLockExpired())
 				{
-					//TODO log.warn("the message queue lock expired, so consume later, {}",this.messageQueue);
-					//ConsumeMessageOrderlyService.this.tryLockLaterAndReconsume(this.messageQueue,
-					//	this.processQueue, 10);
+					MqLogWarn("the message queue lock expired, so consume later: "
+                        "[topic=%s, broker=%s, queue=%d]", 
+                        m_pMessageQueue->getTopic().c_str(),
+					    m_pMessageQueue->getBrokerName().c_str(),
+					    m_pMessageQueue->getQueueId());
+					m_pService->tryLockLaterAndReconsume(m_pMessageQueue, m_pProcessQueue, 10);
 					break;
 				}
 
@@ -377,17 +415,17 @@ void ConsumeOrderlyRequest::Do()
 				if (interval > ConsumeMessageOrderlyService::s_MaxTimeConsumeContinuously)
 				{
 					// 过10ms后再消费
-					m_pService->submitConsumeRequestLater(m_pProcessQueue, m_messageQueue, 10);
+					m_pService->submitConsumeRequestLater(m_pProcessQueue, m_pMessageQueue, 10);
 					break;
 				}
 
 				int consumeBatchSize = 
 					m_pService->getDefaultMQPushConsumer()->getConsumeMessageBatchMaxSize();
 
-				std::list<MessageExt*> msgs = m_pProcessQueue->takeMessages(consumeBatchSize);
+				std::list<MessageExt*> msgs = m_pProcessQueue->takeMessags(consumeBatchSize);
 				if (!msgs.empty())
 				{
-					ConsumeOrderlyContext context(m_messageQueue);
+					ConsumeOrderlyContext context(*m_pMessageQueue);
 
 					ConsumeOrderlyStatus status = SUSPEND_CURRENT_QUEUE_A_MOMENT;
 
@@ -396,7 +434,7 @@ void ConsumeOrderlyRequest::Do()
 					if (m_pService->getDefaultMQPushConsumerImpl()->hasHook())
 					{
 						consumeMessageContext.consumerGroup = m_pService->getConsumerGroup();
-						consumeMessageContext.mq = m_messageQueue;
+						consumeMessageContext.mq = *m_pMessageQueue;
 						consumeMessageContext.msgList = msgs;
 						consumeMessageContext.success = false;
 						m_pService->getDefaultMQPushConsumerImpl()->executeHookBefore(consumeMessageContext);
@@ -410,19 +448,17 @@ void ConsumeOrderlyRequest::Do()
 					}
 					catch (...)
 					{
-						// TODO log.warn("consumeMessage exception: {} Group: {} Msgs: {} MQ: {}",//
-						//	RemotingHelper.exceptionSimpleDesc(e),//
-						//	ConsumeMessageOrderlyService.this.consumerGroup,//
-						//	msgs,//
-						//	messageQueue);
+						MqLogWarn("consumeMessage exception: Group: {%s} "
+                            "MQ: {topic=%s, broker=%s, queue=%d}",
+                            m_pService->getConsumerGroup().c_str(),
+                            m_pMessageQueue->getTopic().c_str(),
+    					    m_pMessageQueue->getBrokerName().c_str(),
+    					    m_pMessageQueue->getQueueId());
+                        status = SUSPEND_CURRENT_QUEUE_A_MOMENT;
 					}
 
-					long long consumeRT = GetCurrentTimeMillis() - beginTimestamp;
+					long consumeRT = long (GetCurrentTimeMillis() - beginTimestamp);
 
-					// 用户抛出异常或者返回null，都挂起队列
-					//if (null == status) {
-					//	status = ConsumeOrderlyStatus.SUSPEND_CURRENT_QUEUE_A_MOMENT;
-					//}
 
 					// 执行Hook
 					if (m_pService->getDefaultMQPushConsumerImpl()->hasHook())
@@ -437,10 +473,24 @@ void ConsumeOrderlyRequest::Do()
 					MixAll::compareAndIncreaseOnly(m_pService->getConsumerStat()
 						.consumeMsgRTMax, consumeRT);
 
-					continueConsume = m_pService->processConsumeResult(msgs, status, context, *this);
+					continueConsume = m_pService->processConsumeResult(&msgs, status, context, *this);
+                    /* modified by yu.guangjie at 2015-08-26, reason: delete MessageExt* */
+                    if(continueConsume)
+                    {
+                        std::list<MessageExt*>::iterator it = msgs.begin();
+                        for (; it != msgs.end(); it++)
+                        {
+                            MqLogVerb("ConsumeOrderlyRequest: delete msg offset=%lld", (*it)->getQueueOffset());
+                        	delete *it;
+                        }
+                        msgs.clear();
+                    }
 				}
 				else
 				{
+				    MqLogVerb("takeMessags() empty: topic=%s,broker=%s--%d",
+                        m_pMessageQueue->getTopic().c_str(),m_pMessageQueue->getBrokerName().c_str(),
+                        m_pMessageQueue->getQueueId());
 					continueConsume = false;
 				}
 			}
@@ -448,7 +498,11 @@ void ConsumeOrderlyRequest::Do()
 		// 没有拿到当前队列的锁，稍后再消费
 		else
 		{
-			m_pService->tryLockLaterAndReconsume(m_messageQueue, m_pProcessQueue, 10);
+		    MqLogVerb("tryLockLaterAndReconsume() : topic=%s,broker=%s--%d",
+                m_pMessageQueue->getTopic().c_str(),m_pMessageQueue->getBrokerName().c_str(),
+                m_pMessageQueue->getQueueId());
+			m_pService->tryLockLaterAndReconsume(m_pMessageQueue, m_pProcessQueue, 10);
+
 		}
 	}
 

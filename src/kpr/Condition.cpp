@@ -223,7 +223,7 @@ namespace kpr
 #else
 
 		int ret = 0;
-		if (timeout < 0)
+		if (timeout <= 0)
 		{
 			ret = pthread_cond_wait(&m_cond, &mutex.m_mutex);
 		}
@@ -238,11 +238,12 @@ namespace kpr
 		}
 		else
 		{
-			if (errno==EINTR)
+            /* modified by yu.guangjie at 2015-08-18, reason: change errno 2 ret*/
+			if (ret==EINTR)
 			{
 				THROW_EXCEPTION(InterruptedException,"pthread_cond_timedwait failed",errno);
 			}
-			else if (errno==ETIMEDOUT && timeout >= 0)
+			else if (ret==ETIMEDOUT && timeout >= 0)
 			{
 				return false;
 			}

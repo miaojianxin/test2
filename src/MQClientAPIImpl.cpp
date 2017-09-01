@@ -48,7 +48,11 @@ MQClientAPIImpl::MQClientAPIImpl( const RemoteClientConfig& remoteClientConfig,
 
 MQClientAPIImpl::~MQClientAPIImpl()
 {
-
+    if(m_pRemotingClient != NULL)
+    {
+        delete m_pRemotingClient;
+        m_pRemotingClient = NULL;
+    }
 }
 
 std::string MQClientAPIImpl::getProjectGroupPrefix()
@@ -77,7 +81,6 @@ std::string MQClientAPIImpl::fetchNameServerAddr()
 			{
 				updateNameServerAddressList(addrs);
 				m_nameSrvAddr = addrs;
-				Logger::get_logger()->info("Name Server changed: {} -> {}", m_nameSrvAddr, addrs);
 				return m_nameSrvAddr;
 			}
 		}
@@ -128,8 +131,49 @@ void MQClientAPIImpl::shutdown()
 void MQClientAPIImpl::createSubscriptionGroup(const std::string& addr,
 											  SubscriptionGroupConfig config,
 											  int timeoutMillis)
-{
-	//TODO
+{	
+	/* modified by liang.haibo at 2016-10-11, reason: add createSubscriptionGroup*/
+	// 添加虚拟运行环境相关的projectGroupPrefix
+	if (!UtilAll::isBlank(m_projectGroupPrefix))
+	{
+		config.groupName = VirtualEnvUtil::buildWithProjectGroup(config.groupName,m_projectGroupPrefix);
+	}
+
+	SubscriptionGroupConfigHeader * requestHeader = new SubscriptionGroupConfigHeader();
+	requestHeader->groupName = config.groupName;
+	requestHeader->consumeEnable = config.consumeEnable;
+	requestHeader->consumeFromMinEnable = config.consumeFromMinEnable;
+	requestHeader->consumeBroadcastEnable = config.consumeBroadcastEnable;
+	requestHeader->retryQueueNums = config.retryQueueNums;
+	requestHeader->retryMaxTimes = config.retryMaxTimes;
+	requestHeader->brokerId = config.brokerId;
+	requestHeader->whichBrokerWhenConsumeSlowly = config.whichBrokerWhenConsumeSlowly;
+	
+	RemotingCommand* request =
+		RemotingCommand::createRequestCommand(UPDATE_AND_CREATE_SUBSCRIPTIONGROUP_VALUE, requestHeader);
+	request->Encode();
+	
+	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+	delete request;
+	if (response)
+	{
+	    int code = response->getCode();
+		switch (code)
+		{
+			case SUCCESS_VALUE:
+			{
+                delete response;
+				return;
+			}
+			default:
+				break;
+		}
+        std::string remark = response->getRemark();        
+        delete response;
+
+		THROW_MQEXCEPTION(MQClientException, remark,code);
+	}
+
 }
 
 
@@ -158,32 +202,28 @@ void MQClientAPIImpl::createTopic(const std::string& addr,
 		RemotingCommand::createRequestCommand(UPDATE_AND_CREATE_TOPIC_VALUE,requestHeader);
 	request->Encode();
 
-	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, request, timeoutMillis);
-	
+	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+	delete request;
 	if (response)
 	{
-		switch (response->getCode())
+	    /* modified by yu.guangjie at 2015-08-14, reason: */
+	    int code = response->getCode();
+		switch (code)
 		{
 		case SUCCESS_VALUE:
 			{
-				delete response;
-				delete request;
+                delete response;
 				return;
 			}
 		default:
 			break;
 		}
+        std::string remark = response->getRemark();        
+        delete response;
 
-		std::string remark = response->getRemark();
-		int repCode = response->getCode();
-
-		delete response;
-		delete request;
-
-		THROW_MQEXCEPTION(MQClientException, remark,repCode);
+		THROW_MQEXCEPTION(MQClientException, remark,code);
 	}
 
-	delete request;
 	THROW_MQEXCEPTION(MQClientException, "createTopic failed",-1);
 }
 
@@ -214,28 +254,30 @@ SendResult MQClientAPIImpl::sendMessage(const std::string& addr,
 	switch (communicationMode)
 	{
 	case ONEWAY:
-		m_pRemotingClient->invokeOneway(addr, request, timeoutMillis);
-		delete request;
+		m_pRemotingClient->invokeOneway(addr, *request, timeoutMillis);
+        delete request;
 		return result;
 	case ASYNC:
-		sendMessageAsync(addr, brokerName, msg, timeoutMillis, request, pSendCallback);
-		delete request;
+		sendMessageAsync(addr, brokerName, msg, timeoutMillis, *request, pSendCallback);
+        delete request;
 		return result;
 	case SYNC:
 		{
-			SendResult* r = sendMessageSync(addr, brokerName, msg, timeoutMillis, request);
-
+			SendResult* r = sendMessageSync(addr, brokerName, msg, timeoutMillis, *request);
+            delete request;
 			if (r)
 			{
 				result =*r;
+    			/* modified by yu.guangjie at 2016-04-19, reason: delete r */
+				delete r;
 			}
-			delete request;
+
 			return result;
 		}
 	default:
 		break;
 	}
-	delete request;
+
 	return result;
 }
 
@@ -256,31 +298,67 @@ PullResult* MQClientAPIImpl::pullMessage(const std::string& addr,
 
 	RemotingCommand* request = RemotingCommand::createRequestCommand(PULL_MESSAGE_VALUE, pRequestHeader);
 	request->Encode();
-	PullResult* result = NULL;
+
 	switch (communicationMode)
 	{
 	case ONEWAY:
-		break;
+		return NULL;
 	case ASYNC:
 		pullMessageAsync(addr, request, timeoutMillis, pPullCallback);
-		break;
+        delete request;
+		return NULL;
 	case SYNC:
-		result =  pullMessageSync(addr, request, timeoutMillis);
-		break;
+        {
+    		PullResult* result = pullMessageSync(addr, request, timeoutMillis);
+            delete request;
+            return result;
+        }
 	default:
-		assert(false);
 		break;
 	}
 
-	delete request;
-	return result;
+	return NULL;
 }
 
-MessageExt MQClientAPIImpl::viewMessage( const std::string& addr,  long long phyoffset,  int timeoutMillis)
+MessageExt* MQClientAPIImpl::viewMessage( const std::string& addr,  long long phyoffset,  int timeoutMillis)
 {
-	//TODO
-	MessageExt msg;
-	return msg;
+	/* modified by liang.haibo at 2016-10-11, reason: add viewMessage*/
+	ViewMessageRequestHeader* requestHeader = new ViewMessageRequestHeader();
+    requestHeader->setOffset(phyoffset);
+    RemotingCommand* request =
+		RemotingCommand::createRequestCommand(VIEW_MESSAGE_BY_ID_VALUE, requestHeader);
+    request->Encode();
+    RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
+    if(response != NULL)
+    {
+        int code = response->getCode();
+        switch (code) 
+        {
+			case SUCCESS_VALUE: 
+			{	
+				int tmp = 0;
+				MessageExt* messageExt = MessageDecoder::decode( response->GetBody(), response->GetBodyLen(), tmp);
+				
+				// 清除虚拟运行环境相关的projectGroupPrefix
+				if (!UtilAll::isBlank(m_projectGroupPrefix)) 
+				{
+					messageExt->setTopic(VirtualEnvUtil::clearProjectGroup(messageExt->getTopic(),m_projectGroupPrefix));
+				}
+				delete response;
+				return messageExt;
+			}
+			default:
+				break;
+        }
+        std::string remark = response->getRemark();        
+        delete response;
+
+        THROW_MQEXCEPTION(MQClientException, remark,code);
+    }
+    
+	return NULL;
+	
 }
 
 long long MQClientAPIImpl::searchOffset( const std::string& addr,
@@ -289,21 +367,52 @@ long long MQClientAPIImpl::searchOffset( const std::string& addr,
 										long long timestamp,
 										int timeoutMillis)
 {
-	// TODO
+	/* modified by liang.haibo at 2016-10-08, reason: support message restore by timestamp*/
+	MqLogVerb("searchOffset[%lld] on broker: address(%s), topic(%s), queueid(%d)", 
+			  timestamp, addr.c_str(), topic.c_str(), queueId);
+	
+	// 添加虚拟运行环境相关的projectGroupPrefix
+    std::string topicWithProjectGroup = topic;
+    if (!UtilAll::isBlank(m_projectGroupPrefix)) 
+    {
+        topicWithProjectGroup = VirtualEnvUtil::buildWithProjectGroup(topic, m_projectGroupPrefix);
+    }
+	
+	SearchOffsetRequestHeader* requestHeader = new SearchOffsetRequestHeader();
+	requestHeader->setTopic(topicWithProjectGroup);
+	requestHeader->setQueueId(queueId);
+	requestHeader->setTimestamp(timestamp);
+	
+	MqLogDebug("SearchOffsetRequest topic(%s) QueueID(%d) timestamp(%lld)", topicWithProjectGroup.c_str(), queueId, timestamp);
+	RemotingCommand* request =
+		RemotingCommand::createRequestCommand(SEARCH_OFFSET_BY_TIMESTAMP_VALUE, requestHeader);
+    request->Encode();
+    RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
+    if(response != NULL)
+    {
+        int code = response->getCode();
+        switch (code) 
+        {
+			case SUCCESS_VALUE: 
+			{
+				SearchOffsetResponseHeader* responseHeader = (SearchOffsetResponseHeader*)response->getCommandCustomHeader();
+				long long offset = responseHeader->getOffset();
+				delete response;
+				MqLogDebug("SearchOffset Response Offset [%lld]", offset);
+				return offset;
+			}
+			default:
+				break;
+        }
+        std::string remark = response->getRemark();        
+        delete response;
 
+        THROW_MQEXCEPTION(MQClientException, remark,code);
+    }
+	
 	return 0;
 }
-
-long long MQClientAPIImpl::getMaxOffset( const std::string& addr,
-										const std::string& topic,
-										int queueId,
-										int timeoutMillis)
-{
-	//TODO
-
-	return 0;
-}
-
 
 std::list<std::string> MQClientAPIImpl::getConsumerIdListByGroup(const std::string& addr,
 																const std::string& consumerGroup,
@@ -324,11 +433,13 @@ std::list<std::string> MQClientAPIImpl::getConsumerIdListByGroup(const std::stri
 
 	request->Encode();
 
-	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, request, timeoutMillis);
-
+	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
 	if (response)
 	{
-		switch (response->getCode())
+	    /* modified by yu.guangjie at 2015-08-14, reason: */
+	    int code = response->getCode();
+		switch (code)
 		{
 		case SUCCESS_VALUE:
 			{
@@ -336,37 +447,120 @@ std::list<std::string> MQClientAPIImpl::getConsumerIdListByGroup(const std::stri
 				{
 					GetConsumerListByGroupResponseBody* body =
 						GetConsumerListByGroupResponseBody::Decode((char*)response->GetBody(),response->GetBodyLen());
-					
-					std::list<std::string> ret = body->getConsumerIdList();
-					delete response;
-					delete request;
-					delete body;
-					return ret;
+                    std::list<std::string> conList = body->getConsumerIdList();
+                    delete response;
+                    delete body;
+                    return conList;
 				}
 			}
 		default:
 			break;
 		}
+        std::string remark = response->getRemark();        
+        delete response;
 
-		std::string remark = response->getRemark();
-		int repCode = response->getCode();
-
-		delete response;
-		delete request;
-
-		THROW_MQEXCEPTION(MQClientException, remark, repCode);
+		THROW_MQEXCEPTION(MQClientException, remark,code);
 	}
 
-	delete request;
 	THROW_MQEXCEPTION(MQClientException, "getConsumerIdListByGroup failed",-1);
 }
+
+
+long long MQClientAPIImpl::getMaxOffset( const std::string& addr,
+		const std::string& topic,
+		int queueId,
+		int timeoutMillis)
+{
+	/* modified by liang.haibo at 2016-10-10 , reason: add getMaxOffset*/
+	MqLogVerb("getMaxOffset on broker: address(%s), topic(%s), queueid(%d)", 
+			  addr.c_str(), topic.c_str(), queueId);
+	
+	// 添加虚拟运行环境相关的projectGroupPrefix
+    std::string topicWithProjectGroup = topic;
+    if (!UtilAll::isBlank(m_projectGroupPrefix)) 
+    {
+        topicWithProjectGroup = VirtualEnvUtil::buildWithProjectGroup(topic, m_projectGroupPrefix);
+    }
+	
+	GetMaxOffsetRequestHeader* requestHeader = new GetMaxOffsetRequestHeader();
+	requestHeader->setTopic(topicWithProjectGroup);
+	requestHeader->setQueueId(queueId);
+
+	RemotingCommand* request =
+		RemotingCommand::createRequestCommand(GET_MAX_OFFSET_VALUE, requestHeader);
+    request->Encode();
+    RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
+    if(response != NULL)
+    {
+        int code = response->getCode();
+        switch (code) 
+        {
+			case SUCCESS_VALUE: 
+			{
+				GetMaxOffsetResponseHeader* responseHeader = ( GetMaxOffsetResponseHeader*)response->getCommandCustomHeader();
+				long long offset = responseHeader->getOffset();
+				delete response;
+				MqLogDebug("GetMaxOffset Response Offset [%lld]", offset);
+				return offset;
+			}
+			default:
+				break;
+        }
+        std::string remark = response->getRemark();        
+        delete response;
+
+        THROW_MQEXCEPTION(MQClientException, remark,code);
+    }
+	
+	return 0;
+}
+
 
 long long MQClientAPIImpl::getMinOffset(const std::string& addr,
 										const std::string& topic,
 										int queueId,
 										int timeoutMillis)
 {
-	//TODO
+    /* modified by yu.guangjie at 2015-08-17, reason: add getMinOffset*/
+    // 添加虚拟运行环境相关的projectGroupPrefix
+    std::string topicWithProjectGroup = topic;
+    if (!UtilAll::isBlank(m_projectGroupPrefix)) 
+    {
+        topicWithProjectGroup = VirtualEnvUtil::buildWithProjectGroup(topic, m_projectGroupPrefix);
+    }
+
+    GetMinOffsetRequestHeader* requestHeader = new GetMinOffsetRequestHeader();
+    requestHeader->setTopic(topicWithProjectGroup);
+    requestHeader->setQueueId(queueId);
+    RemotingCommand* request =
+            RemotingCommand::createRequestCommand(GET_MIN_OFFSET_VALUE, requestHeader);
+    request->Encode();
+    RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
+    if(response != NULL)
+    {
+        int code = response->getCode();
+        switch (code) 
+        {
+        case SUCCESS_VALUE: 
+        {
+            GetMinOffsetResponseHeader* responseHeader =
+                    (GetMinOffsetResponseHeader*)response->getCommandCustomHeader();
+            long long offset = responseHeader->getOffset();
+            delete response;
+            
+            return offset;
+        }
+        default:
+            break;
+        }
+        std::string remark = response->getRemark();        
+        delete response;
+
+        THROW_MQEXCEPTION(MQClientException, remark,code);
+    }
+    
 	return 0;
 }
 
@@ -375,7 +569,48 @@ long long MQClientAPIImpl::getEarliestMsgStoretime(const std::string& addr,
 													int queueId,
 													int timeoutMillis)
 {
-	//TODO
+	/* modified by liang.haibo at 2016-10-10 , reason: */
+	MqLogVerb("getMaxOffset on broker: address(%s), topic(%s), queueid(%d)", 
+			  addr.c_str(), topic.c_str(), queueId);
+	
+	// 添加虚拟运行环境相关的projectGroupPrefix
+    std::string topicWithProjectGroup = topic;
+    if (!UtilAll::isBlank(m_projectGroupPrefix)) 
+    {
+        topicWithProjectGroup = VirtualEnvUtil::buildWithProjectGroup(topic, m_projectGroupPrefix);
+    }
+	
+	GetEarliestMsgStoretimeRequestHeader* requestHeader = new GetEarliestMsgStoretimeRequestHeader();
+	requestHeader->setTopic(topicWithProjectGroup);
+	requestHeader->setQueueId(queueId);
+
+	RemotingCommand* request =
+		RemotingCommand::createRequestCommand(GET_EARLIEST_MSG_STORETIME_VALUE, requestHeader);
+    request->Encode();
+    RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
+    if(response != NULL)
+    {
+        int code = response->getCode();
+        switch (code) 
+        {
+			case SUCCESS_VALUE: 
+			{
+				GetEarliestMsgStoretimeResponseHeader* responseHeader = ( GetEarliestMsgStoretimeResponseHeader*)response->getCommandCustomHeader();
+				long long timestamp = responseHeader->getTimestamp();
+				delete response;
+				MqLogDebug("getEarliestMsgStoretime timestamp [%lld]",  timestamp );
+				return timestamp;
+			}
+			default:
+				break;
+        }
+        std::string remark = response->getRemark();        
+        delete response;
+
+        THROW_MQEXCEPTION(MQClientException, remark,code);
+    }
+	
 	return 0;
 }
 
@@ -383,74 +618,121 @@ long long MQClientAPIImpl::queryConsumerOffset(const std::string& addr,
 												QueryConsumerOffsetRequestHeader* pRequestHeader,
 												int timeoutMillis)
 {
-	// 添加虚拟运行环境相关的projectGroupPrefix
-	if (!UtilAll::isBlank(m_projectGroupPrefix))
-	{
-		pRequestHeader->consumerGroup = VirtualEnvUtil::buildWithProjectGroup(
-			pRequestHeader->consumerGroup, m_projectGroupPrefix);
-		pRequestHeader->topic = VirtualEnvUtil::buildWithProjectGroup(pRequestHeader->topic,
-			m_projectGroupPrefix);
-	}
+    /* modified by yu.guangjie at 2015-08-16, reason: add queryConsumerOffset */
+    
+    // 添加虚拟运行环境相关的projectGroupPrefix
+    if (!UtilAll::isBlank(m_projectGroupPrefix)) {
+        pRequestHeader->setConsumerGroup(VirtualEnvUtil::buildWithProjectGroup(
+            pRequestHeader->getConsumerGroup(), m_projectGroupPrefix));
+        pRequestHeader->setTopic(VirtualEnvUtil::buildWithProjectGroup(
+            pRequestHeader->getTopic(), m_projectGroupPrefix));
+    }
 
-	RemotingCommand* request =
-		RemotingCommand::createRequestCommand(QUERY_CONSUMER_OFFSET_VALUE, pRequestHeader);
+    RemotingCommand* request =
+            RemotingCommand::createRequestCommand(QUERY_CONSUMER_OFFSET_VALUE, pRequestHeader);
+    request->Encode();
+    RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
+    if(response != NULL)
+    {
+        int code = response->getCode();
+        switch (code) 
+        {
+        case SUCCESS_VALUE: 
+        {
+            QueryConsumerOffsetResponseHeader* responseHeader = (QueryConsumerOffsetResponseHeader*)response->getCommandCustomHeader();
+            long long offset = responseHeader->getOffset();
+            delete response;
+            
+            return offset;
+        }
+        default:
+            break;
+        }
+        std::string remark = response->getRemark();        
+        delete response;
 
-	request->Encode();
+		/** Note by lin.qiongshan, 2016-11-10，为什么这么改
+			RebalancePushImpl::computePullFromWhere
+				==> RemoteBrokerOffsetStore::readOffset
+					==> RemoteBrokerOffsetStore::fetchConsumeOffsetFromBroker
+						==> 本函数
+			当本函数抛出 MQBrokerException 异常时，RemoteBrokerOffsetStore::readOffset 会返回 -1，在 RebalancePushImpl::computePullFromWhere 里这表示首次注册，根据设置从何处消费定位起始的消费位置
+				如果是原来的 MQClientException, RemoteBrokerOffsetStore::readOffset 会返回 -2，RebalancePushImpl::computePullFromWhere 无法正确处理
+			关于首次注册：
+				consumer 发送 code(14) 请求 offset 数据时，如果 consumer_group 是首次注册，服务端的响应错误码是 22，到这里抛出异常，让外部客户端根据 CONSUMER_FROM_WHERE 的设置计算起始消费位置
+		*/
+		/* modified by yu.guangjie at 2016-11-10, reason: change MQClientException to MQBrokerException*/
+		THROW_MQEXCEPTION(MQBrokerException, remark, code);
+    }   
 
-	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, request, timeoutMillis);
-
-	if (response == nullptr) {
-		return -1;
-	}
-
-	switch (response->getCode())
-	{
-	case SUCCESS_VALUE:
-		{
-			QueryConsumerOffsetResponseHeader* ret = (QueryConsumerOffsetResponseHeader*)response->getCommandCustomHeader();
-			long long offset = ret->offset;
-
-			delete request;
-			delete response;
-
-			return offset;
-		}
-	default:
-		break;
-	}
-
-	//throw new MQBrokerException(response.getCode(), response.getRemark());
-	return -1;
+	return 0;
 }
 
 void MQClientAPIImpl::updateConsumerOffset(const std::string& addr,
 											UpdateConsumerOffsetRequestHeader* pRequestHeader,
 											int timeoutMillis)
 {
-	//TODO
+	/* modified by liang.haibo at 2016-10-11, reason： add updateConsumerOffset 
+	 * updateConsumerOffset used only by admin tools
+	 * broker use updateConsumerOffsetOneway
+	 */
+	// 添加虚拟运行环境相关的projectGroupPrefix
+    if (!UtilAll::isBlank(m_projectGroupPrefix)) 
+    {
+        pRequestHeader->setConsumerGroup(VirtualEnvUtil::buildWithProjectGroup(
+											 pRequestHeader->getConsumerGroup(), m_projectGroupPrefix));
+        pRequestHeader->setTopic(VirtualEnvUtil::buildWithProjectGroup(
+									 pRequestHeader->getTopic(), m_projectGroupPrefix));
+    }
+
+    RemotingCommand* request =
+		RemotingCommand::createRequestCommand(UPDATE_CONSUMER_OFFSET_VALUE, pRequestHeader);
+    request->Encode();
+	
+    RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
+    if(response != NULL)
+    {
+        int code = response->getCode();
+        switch (code) 
+        {
+			case SUCCESS_VALUE: 
+			{
+				return;
+			}
+			default:
+				break;
+        }
+        std::string remark = response->getRemark();        
+        delete response;
+
+        THROW_MQEXCEPTION(MQClientException, remark,code);
+    }   
 }
 
 void MQClientAPIImpl::updateConsumerOffsetOneway(const std::string& addr,
 												UpdateConsumerOffsetRequestHeader* pRequestHeader,
 												int timeoutMillis)
 {
-	// 添加虚拟运行环境相关的projectGroupPrefix
-	if (!UtilAll::isBlank(m_projectGroupPrefix))
-	{
-		pRequestHeader->consumerGroup = VirtualEnvUtil::buildWithProjectGroup(
-			pRequestHeader->consumerGroup, m_projectGroupPrefix);
-		pRequestHeader->topic = VirtualEnvUtil::buildWithProjectGroup(pRequestHeader->topic,
-			m_projectGroupPrefix);
-	}
+    /* modified by yu.guangjie at 2015-08-16, reason: add updateConsumerOffsetOneway*/
+	
+    // 添加虚拟运行环境相关的projectGroupPrefix
+    if (!UtilAll::isBlank(m_projectGroupPrefix)) 
+    {
+        pRequestHeader->setConsumerGroup(VirtualEnvUtil::buildWithProjectGroup(
+            pRequestHeader->getConsumerGroup(), m_projectGroupPrefix));
+        pRequestHeader->setTopic(VirtualEnvUtil::buildWithProjectGroup(
+            pRequestHeader->getTopic(), m_projectGroupPrefix));
+    }
 
-	RemotingCommand* request =
-		RemotingCommand::createRequestCommand(UPDATE_CONSUMER_OFFSET_VALUE, pRequestHeader);
+    RemotingCommand* request =
+            RemotingCommand::createRequestCommand(UPDATE_CONSUMER_OFFSET_VALUE, pRequestHeader);
+    request->Encode();
+    m_pRemotingClient->invokeOneway(addr, *request, timeoutMillis);
 
-	request->Encode();
+    delete request;
 
-	m_pRemotingClient->invokeOneway(addr, request, timeoutMillis);
-
-	delete request;
 }
 
 void MQClientAPIImpl::sendHearbeat(const std::string& addr, HeartbeatData* pHeartbeatData, int timeoutMillis)
@@ -493,33 +775,31 @@ void MQClientAPIImpl::sendHearbeat(const std::string& addr, HeartbeatData* pHear
 	std::string body;
 	pHeartbeatData->Encode(body);
 	request->SetBody((char*)body.data(),body.length(),true);
+
 	request->Encode();
 
-	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, request, timeoutMillis);
+	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
 	if (response)
 	{
-		switch (response->getCode())
+	    /* modified by yu.guangjie at 2015-08-14, reason: */
+	    int code = response->getCode();
+		switch (code)
 		{
 		case SUCCESS_VALUE:
 			{
-				delete response;
-				delete request;
+                delete response;
 				return;
 			}
 		default:
 			break;
-		}
+		}        
+        std::string remark = response->getRemark();        
+        delete response;
 
-		std::string remark = response->getRemark();
-		int repCode = response->getCode();
-
-		delete response;
-		delete request;
-
-		THROW_MQEXCEPTION(MQClientException, remark, repCode);
+		THROW_MQEXCEPTION(MQClientException, remark,code);
 	}
 
-	delete request;
 	THROW_MQEXCEPTION(MQClientException, "sendHearbeat failed",-1);
 }
 
@@ -529,7 +809,48 @@ void MQClientAPIImpl::unregisterClient(const std::string& addr,
 										const std::string& consumerGroup,
 										int timeoutMillis)
 {
-	//TODO
+    /* modified by yu.guangjie at 2015-08-17, reason: add unregisterClient */
+    MqLogVerb("unregister[%s & %s] on broker: address(%s), clientid(%s)", 
+        producerGroup.c_str(), consumerGroup.c_str(), addr.c_str(), clientID.c_str());
+    
+    // 添加虚拟运行环境相关的projectGroupPrefix
+    std::string producerGroupWithProjectGroup = producerGroup;
+    std::string consumerGroupWithProjectGroup = consumerGroup;
+    if (!UtilAll::isBlank(m_projectGroupPrefix)) 
+    {
+        producerGroupWithProjectGroup =
+            VirtualEnvUtil::buildWithProjectGroup(producerGroup, m_projectGroupPrefix);
+        consumerGroupWithProjectGroup =
+            VirtualEnvUtil::buildWithProjectGroup(consumerGroup, m_projectGroupPrefix);
+    }
+
+    UnregisterClientRequestHeader* requestHeader = new UnregisterClientRequestHeader();
+    requestHeader->setClientID(clientID);
+    requestHeader->setProducerGroup(producerGroupWithProjectGroup);
+    requestHeader->setConsumerGroup(consumerGroupWithProjectGroup);
+    RemotingCommand* request =
+            RemotingCommand::createRequestCommand(UNREGISTER_CLIENT_VALUE, requestHeader);
+    request->Encode();
+    RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
+    if(response != NULL)
+    {
+        int code = response->getCode();
+        switch (code) 
+        {
+        case SUCCESS_VALUE: 
+            {
+                delete response;
+                return;
+            }
+        default:
+            break;
+        }
+        std::string remark = response->getRemark();        
+        delete response;
+
+		THROW_MQEXCEPTION(MQClientException, remark,code);
+    }
 }
 
 void MQClientAPIImpl::endTransactionOneway(const std::string& addr,
@@ -548,10 +869,57 @@ void MQClientAPIImpl::queryMessage(const std::string& addr,
 	//TODO
 }
 
-bool MQClientAPIImpl::registerClient( const std::string& addr, HeartbeatData heartbeat, int timeoutMillis)
+bool MQClientAPIImpl::registerClient( const std::string& addr, HeartbeatData* pHeartbeatData, int timeoutMillis)
 {
-	//TODO
-	return true;
+	// 添加虚拟运行环境相关的projectGroupPrefix
+	if (!UtilAll::isBlank(m_projectGroupPrefix))
+	{
+		std::set<ConsumerData>& consumerDatas = pHeartbeatData->getConsumerDataSet();
+		std::set<ConsumerData>::iterator it = consumerDatas.begin();
+
+		for (; it!= consumerDatas.end();it++)
+		{
+			ConsumerData& consumerData = (ConsumerData&)(*it);
+
+			consumerData.groupName = VirtualEnvUtil::buildWithProjectGroup(consumerData.groupName,
+									 m_projectGroupPrefix);
+			std::set<SubscriptionData>& subscriptionDatas = consumerData.subscriptionDataSet;
+			std::set<SubscriptionData>::iterator itsub=subscriptionDatas.begin();
+
+			for (; itsub != subscriptionDatas.end();itsub++)
+			{
+				SubscriptionData& subscriptionData = (SubscriptionData&)(*itsub);
+				subscriptionData.setTopic(VirtualEnvUtil::buildWithProjectGroup(
+											  subscriptionData.getTopic(), m_projectGroupPrefix));
+			}
+		}
+
+		std::set<ProducerData>& producerDatas = pHeartbeatData->getProducerDataSet();
+		std::set<ProducerData>::iterator itp = producerDatas.begin();
+		for (;itp!=producerDatas.end();itp++)
+		{
+			ProducerData& producerData = (ProducerData&)(*itp);
+			producerData.groupName = VirtualEnvUtil::buildWithProjectGroup(producerData.groupName,
+									 m_projectGroupPrefix);
+		}
+	}
+
+	RemotingCommand* request = RemotingCommand::createRequestCommand(HEART_BEAT_VALUE, NULL);
+	
+	std::string body;
+	pHeartbeatData->Encode(body);
+	request->SetBody((char*)body.data(),body.length(),true);
+	request->Encode();
+
+	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
+	if (response != NULL)
+	{
+	    return response->getCode() == SUCCESS_VALUE;
+	}
+
+	THROW_MQEXCEPTION(MQClientException, "RegisterClient failed",-1);
+	
 }
 
 void MQClientAPIImpl::consumerSendMessageBack(MessageExt& msg,
@@ -580,36 +948,26 @@ void MQClientAPIImpl::consumerSendMessageBack(MessageExt& msg,
 
 	request->Encode();
 
-	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, request, timeoutMillis);
+	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
 	if (response)
 	{
-		bool ret =false;
-		switch (response->getCode())
+        /* modified by yu.guangjie at 2015-08-14, reason: */
+	    int code = response->getCode();
+		switch (code)
 		{
 		case SUCCESS_VALUE:
-			ret = true;
-			break;
+            delete response;
+			return;
 		default:
 			break;
 		}
+        std::string remark = response->getRemark();        
+        delete response;
 
-		delete request;
-
-		if (ret)
-		{
-			delete response;
-			return;
-		}
-
-		std::string remark = response->getRemark();
-		int repCode = response->getCode();
-
-		delete response;
-
-		THROW_MQEXCEPTION(MQClientException, remark, repCode);
+		THROW_MQEXCEPTION(MQClientException, remark,code);
 	}
 
-	delete request;
 	THROW_MQEXCEPTION(MQClientException, "consumerSendMessageBack failed",-1);
 }
 
@@ -640,10 +998,13 @@ std::set<MessageQueue> MQClientAPIImpl::lockBatchMQ(const std::string& addr,
 	request->SetBody((char*)body.data(),body.length(),true);
 	request->Encode();
 
-	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, request, timeoutMillis);
+	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+    delete request;
 	if (response)
 	{
-		switch (response->getCode())
+	    /* modified by yu.guangjie at 2015-08-14, reason: */
+	    int code = response->getCode();
+		switch (code)
 		{
 		case SUCCESS_VALUE:
 			{
@@ -663,25 +1024,23 @@ std::set<MessageQueue> MQClientAPIImpl::lockBatchMQ(const std::string& addr,
 							m_projectGroupPrefix));
 					}
 				}
+				//add by lin.qs@2017-4-5
+				delete responseBody;
+				responseBody = NULL;
 
-				delete response;
-				delete request;
+                delete response;
+                
 				return messageQueues;
 			}
 		default:
 			break;
 		}
+        std::string remark = response->getRemark();        
+        delete response;
 
-		std::string remark = response->getRemark();
-		int repCode = response->getCode();
-
-		delete response;
-		delete request;
-
-		THROW_MQEXCEPTION(MQClientException, remark, repCode);
+		THROW_MQEXCEPTION(MQClientException, remark,code);
 	}
 
-	delete request;
 	THROW_MQEXCEPTION(MQClientException, "lockBatchMQ failed",-1);
 }
 
@@ -715,34 +1074,31 @@ void MQClientAPIImpl::unlockBatchMQ(const std::string& addr,
 
 	if (oneway)
 	{
-		m_pRemotingClient->invokeOneway(addr, request, timeoutMillis);
-		delete request;
+		m_pRemotingClient->invokeOneway(addr, *request, timeoutMillis);
+        delete request;
 	}
 	else
 	{
-		RemotingCommand* response = m_pRemotingClient->invokeSync(addr, request, timeoutMillis);
+		RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *request, timeoutMillis);
+        delete request;
 		if (response)
 		{
-			switch (response->getCode())
+            /* modified by yu.guangjie at 2015-08-14, reason: */
+		    int code = response->getCode();
+			switch (code)
 			{
 			case SUCCESS_VALUE:
-				delete response;
-				delete request;
+                delete response;
 				return;
 			default:
 				break;
 			}
+            std::string remark = response->getRemark();        
+            delete response;
 
-			std::string remark = response->getRemark();
-			int repCode = response->getCode();
-
-			delete response;
-			delete request;
-
-			THROW_MQEXCEPTION(MQClientException, remark, repCode);
+			THROW_MQEXCEPTION(MQClientException, remark,code);
 		}
 
-		delete request;
 		THROW_MQEXCEPTION(MQClientException, "unlockBatchMQ failed",-1);
 	}
 }
@@ -804,21 +1160,22 @@ ClusterInfo* MQClientAPIImpl::getBrokerClusterInfo( int timeoutMillis)
 TopicRouteData* MQClientAPIImpl::getDefaultTopicRouteInfoFromNameServer(const std::string& topic,
 																		int timeoutMillis)
 {
+    MqLogVerb("Get topic[%s] routeinfo from NS: %s", topic.c_str(), m_nameSrvAddr.c_str());
 	GetRouteInfoRequestHeader* requestHeader = new GetRouteInfoRequestHeader();
 	requestHeader->topic=topic;
 
 	RemotingCommand* request = RemotingCommand::createRequestCommand(GET_ROUTEINTO_BY_TOPIC_VALUE,requestHeader);
 	request->Encode();
-	
-	RemotingCommand* response = m_pRemotingClient->invokeSync(m_nameSrvAddr, request, timeoutMillis);
 
+	RemotingCommand* response = m_pRemotingClient->invokeSync(m_nameSrvAddr, *request, timeoutMillis);
+    delete request;
 	if (response)
 	{
-		switch (response->getCode())
+	    int code = response->getCode();
+		switch (code)
 		{
 		case TOPIC_NOT_EXIST_VALUE:
 			{
-				// TODO LOG
 				break;
 			}
 		case SUCCESS_VALUE:
@@ -827,26 +1184,22 @@ TopicRouteData* MQClientAPIImpl::getDefaultTopicRouteInfoFromNameServer(const st
 				const char* body = response->GetBody();
 				if (body)
 				{
-					TopicRouteData* ret = TopicRouteData::Decode(body,bodyLen);
-					delete response;
-					delete request;
-					return ret;
+                    /* modified by yu.guangjie at 2015-08-14, reason: */
+					TopicRouteData *route = TopicRouteData::Decode(body,bodyLen);
+                    delete response;
+                    return route;
 				}
 			}
 		default:
 			break;
 		}
-		
-		std::string remark = response->getRemark();
-		int repCode = response->getCode();
+        /* modified by yu.guangjie at 2015-08-13, reason: */
+        std::string remark = response->getRemark();        
+        delete response;
 
-		delete response;
-		delete request;
-
-		THROW_MQEXCEPTION(MQClientException, remark, repCode);
+		THROW_MQEXCEPTION(MQClientException,remark,code);
 	}
 
-	delete request;
 	return NULL;
 }
 
@@ -858,62 +1211,21 @@ TopicRouteData* MQClientAPIImpl::getTopicRouteInfoFromNameServer(const std::stri
 	{
 		topicWithProjectGroup = VirtualEnvUtil::buildWithProjectGroup(topic, m_projectGroupPrefix);
 	}
-
-	GetRouteInfoRequestHeader* requestHeader = new GetRouteInfoRequestHeader();
-	requestHeader->topic=topicWithProjectGroup;
-
-	RemotingCommand* request = RemotingCommand::createRequestCommand(GET_ROUTEINTO_BY_TOPIC_VALUE,requestHeader);
-	request->Encode();
-
-	RemotingCommand* response = m_pRemotingClient->invokeSync(m_nameSrvAddr, request, timeoutMillis);
-
-	if (response)
-	{
-		switch (response->getCode())
-		{
-		case TOPIC_NOT_EXIST_VALUE:
-			{
-				break;
-			}
-		case SUCCESS_VALUE:
-			{
-				int bodyLen = response->GetBodyLen();
-				const char* body = response->GetBody();
-				if (body)
-				{
-					TopicRouteData* ret = TopicRouteData::Decode(body,bodyLen);
-					delete response;
-					delete request;
-
-					return ret;
-				}
-			}
-		default:
-			break;
-		}
-
-		std::string remark = response->getRemark();
-		int repCode = response->getCode();
-
-		delete response;
-		delete request;
-
-		THROW_MQEXCEPTION(MQClientException, remark, repCode);
-	}
-
-	delete request;
-
-	return NULL;
+    
+    /* modified by yu.guangjie at 2015-08-14, reason: use getDefaultTopicRouteInfoFromNameServer*/
+    return getDefaultTopicRouteInfoFromNameServer(topicWithProjectGroup, timeoutMillis);
 }
 
 TopicList* MQClientAPIImpl::getTopicListFromNameServer( int timeoutMillis)
 {
 	RemotingCommand* request = RemotingCommand::createRequestCommand(GET_ALL_TOPIC_LIST_FROM_NAMESERVER_VALUE,NULL);
 	request->Encode();
-	RemotingCommand* response = m_pRemotingClient->invokeSync(m_nameSrvAddr, request, timeoutMillis);
+	RemotingCommand* response = m_pRemotingClient->invokeSync(m_nameSrvAddr, *request, timeoutMillis);
+    delete request;
 	if (response)
 	{
-		switch (response->getCode())
+	    int code = response->getCode();
+		switch (code)
 		{
 		case SUCCESS_VALUE:
 			{
@@ -937,25 +1249,21 @@ TopicList* MQClientAPIImpl::getTopicListFromNameServer( int timeoutMillis)
 						topicList->setTopicList(newTopicSet);
 					}
 
-					delete response;
-					delete request;
+                    delete response;
+
 					return topicList;
 				}
 			}
 		default:
 			break;
 		}
+        /* modified by yu.guangjie at 2015-08-13, reason: */
+        std::string remark = response->getRemark();        
+        delete response;
 
-		std::string remark = response->getRemark();
-		int repCode = response->getCode();
-
-		delete response;
-		delete request;
-
-		THROW_MQEXCEPTION(MQClientException, remark, repCode);
+		THROW_MQEXCEPTION(MQClientException,remark,code);
 	}
 
-	delete request;
 	return NULL;
 }
 
@@ -1042,29 +1350,37 @@ SendResult* MQClientAPIImpl::sendMessageSync(const std::string& addr,
 											 const std::string& brokerName,
 											 Message& msg,
 											 int timeoutMillis,
-											 RemotingCommand* request)
+											 RemotingCommand& request)
 {
 	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, request, timeoutMillis);
-	return processSendResponse(brokerName, msg.getTopic(), response);
+    /* modified by yu.guangjie at 2015-08-14, reason: */
+	SendResult *result = processSendResponse(brokerName, msg, response);
+    delete response;
+    
+    return result;
 }
 
 void MQClientAPIImpl::sendMessageAsync(const std::string& addr,
 										const std::string& brokerName,
 										Message& msg,
 										int timeoutMillis,
-										RemotingCommand* request,
+										RemotingCommand& request,
 										SendCallback* pSendCallback)
 {
-	ProducerInvokeCallback* callback = new ProducerInvokeCallback(pSendCallback,this,msg.getTopic(),brokerName);
+	/* modified by liang.haibo at 2016-09-18 , reason: procuder sender callback */
+	ProducerInvokeCallback* callback = new ProducerInvokeCallback(brokerName, msg, pSendCallback, this);
 	m_pRemotingClient->invokeAsync(addr, request, timeoutMillis,callback );
 }
 
 SendResult* MQClientAPIImpl::processSendResponse(const std::string& brokerName,
-												const std::string& topic,
+												 Message& msg,
 												 RemotingCommand* pResponse)
 {
+    /* modified by yu.guangjie at 2015-08-31, reason: */
 	if (pResponse==NULL)
 	{
+	    std::string strMsg = "Can't connect/send to broker message: " + brokerName;
+	    THROW_MQEXCEPTION(MQBrokerException, strMsg.c_str(),-1);
 		return NULL;
 	}
 
@@ -1100,21 +1416,16 @@ SendResult* MQClientAPIImpl::processSendResponse(const std::string& brokerName,
 
 			SendMessageResponseHeader* responseHeader = (SendMessageResponseHeader*) pResponse->getCommandCustomHeader();
 
-			MessageQueue messageQueue (topic, brokerName, responseHeader->queueId);
+			MessageQueue messageQueue (msg.getTopic(), brokerName, responseHeader->queueId);
 
-			SendResult* ret = new SendResult(sendStatus, responseHeader->msgId, messageQueue,
+			return new SendResult(sendStatus, responseHeader->msgId, messageQueue,
 				responseHeader->queueOffset, m_projectGroupPrefix);
-
-			return ret;
 		}
 	default:
 		break;
 	}
 
-	std::string remark = pResponse->getRemark();
-	int repCode = pResponse->getCode();
-
-	THROW_MQEXCEPTION(MQClientException, remark, repCode);
+	THROW_MQEXCEPTION(MQBrokerException,pResponse->getRemark(),pResponse->getCode());
 	return NULL;
 }
 
@@ -1123,8 +1434,8 @@ void MQClientAPIImpl::pullMessageAsync(const std::string& addr,
 										int timeoutMillis,
 										PullCallback* pPullCallback)
 {
-	ConsumerInvokeCallback* callback = new ConsumerInvokeCallback(pPullCallback,this);
-	m_pRemotingClient->invokeAsync(addr, pRequest, timeoutMillis,callback);
+	ConsumerInvokeCallback* callback = new ConsumerInvokeCallback(pPullCallback, this);
+	m_pRemotingClient->invokeAsync(addr, *pRequest, timeoutMillis,callback);
 }
 
 PullResult* MQClientAPIImpl::processPullResponse( RemotingCommand* pResponse)
@@ -1156,15 +1467,21 @@ PullResult* MQClientAPIImpl::processPullResponse( RemotingCommand* pResponse)
 		responseHeader->minOffset, responseHeader->maxOffset, msgFoundList,
 		responseHeader->suggestWhichBrokerId, pResponse->GetBody(),pResponse->GetBodyLen());
 }
-
+ 
 PullResult* MQClientAPIImpl::pullMessageSync(const std::string& addr,
 											 RemotingCommand* pRequest,
 											 int timeoutMillis)
 {
-	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, pRequest, timeoutMillis);
+	RemotingCommand* response = m_pRemotingClient->invokeSync(addr, *pRequest, timeoutMillis);
+
+	//mdy by lin.qs, @2017-5-9, 注意，这里 invokeSync 反馈的 response 有可能为空（没有获取到服务端的响应，请求发送失败等情况）
+	if (NULL == response)
+	{
+		THROW_MQEXCEPTION(MQBrokerException, "同步消息拉取失败, 没有收到服务端的响应", 0);
+	}
 
 	PullResult* result = processPullResponse(response);
-
+    /* SetBody(NULL,0,false): because result has the body */
 	response->SetBody(NULL,0,false);
 	delete response;
 

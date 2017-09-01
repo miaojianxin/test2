@@ -17,6 +17,9 @@
 #include "MQProtos.h"
 #include "RemotingCommand.h"
 #include "MQClientFactory.h"
+#include "CommandCustomHeader.h"
+#include "MQClientException.h"
+#include "UtilAll.h"
 
 ClientRemotingProcessor::ClientRemotingProcessor(MQClientFactory* pMQClientFactory)
 	:m_pMQClientFactory (pMQClientFactory)
@@ -48,6 +51,24 @@ RemotingCommand* ClientRemotingProcessor::checkTransactionState(RemotingCommand*
 
 RemotingCommand* ClientRemotingProcessor::notifyConsumerIdsChanged(RemotingCommand* pRequest)
 {
-	//TODO
-	return NULL;
+    /* modified by yu.guangjie at 2015-08-17, reason: add notifyConsumerIdsChanged*/
+    try 
+    {
+        NotifyConsumerIdsChangedRequestHeader* requestHeader =
+                (NotifyConsumerIdsChangedRequestHeader*)pRequest->getCommandCustomHeader();
+        if(requestHeader != NULL)
+        {
+            MqLogNotice("receive broker's notification, the consumer group: "
+                "{%s} changed, rebalance immediately",
+                requestHeader->getConsumerGroup().c_str());
+        }
+        
+        m_pMQClientFactory->rebalanceImmediately();
+    }
+    catch (MQException &e) 
+    {
+        MqLogWarn("notifyConsumerIdsChanged exception: %s\n", e.what());
+    }
+    return NULL;
 }
+

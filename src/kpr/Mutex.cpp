@@ -43,13 +43,14 @@ namespace kpr
 #endif
 	}
 
+    /* modified by yu.guangjie at 2015-08-18, reason: fix return value*/
 	int Mutex::Lock() const
 	{
 #ifdef WIN32
 		EnterCriticalSection(&m_mutex);
 		return 1;
 #else
-		return pthread_mutex_lock(&m_mutex);
+		return (pthread_mutex_lock(&m_mutex) == 0);
 #endif
 	}
 
@@ -58,7 +59,7 @@ namespace kpr
 #ifdef WIN32
 		return TryEnterCriticalSection(&m_mutex);
 #else
-		return pthread_mutex_trylock(&m_mutex);
+		return (pthread_mutex_trylock(&m_mutex) == 0);
 #endif
 	}
 
@@ -68,7 +69,7 @@ namespace kpr
 		LeaveCriticalSection(&m_mutex);
 		return 1;
 #else
-		return pthread_mutex_unlock(&m_mutex);
+		return (pthread_mutex_unlock(&m_mutex) == 0);
 #endif
 	}
 

@@ -44,5 +44,25 @@ namespace kpr
 		Condition m_condition;
 		mutable int m_notifyCount;
 	};
+
+    /* modified by yu.guangjie at 2015-08-18, reason: mutex with timeout */
+    class ToMutex
+	{
+	public:
+		ToMutex();
+		virtual ~ToMutex();
+
+		bool Lock(long msec);
+		void Unlock();
+
+	private:
+        ThreadId m_TID;     ///< 线程TID
+        bool m_bIsLock;     ///< 互斥量是否加锁
+        int m_iCounts;      ///< 加锁次数
+        
+		Mutex m_mutex;
+		Condition m_condition;
+	};
+
 }
 #endif

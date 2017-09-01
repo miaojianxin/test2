@@ -18,6 +18,7 @@
 #include "ScopedLock.h"
 #include "MQClientFactory.h"
 #include "ClientConfig.h"
+#include "UtilAll.h"
 
 MQClientManager* MQClientManager::s_instance = new MQClientManager();
 
@@ -39,6 +40,8 @@ MQClientManager* MQClientManager::getInstance()
 MQClientFactory* MQClientManager::getAndCreateMQClientFactory(ClientConfig& clientConfig)
 {
 	std::string clientId = clientConfig.buildMQClientId();
+    MqLogNotice("Create MQ client: %s", clientId.c_str());
+    
 	kpr::ScopedLock<kpr::Mutex> lock(m_mutex);
 	std::map<std::string, MQClientFactory*>::iterator it=m_factoryTable.find(clientId);
 

@@ -551,7 +551,7 @@ Runner::preventDialogOnCrash()
    _CrtSetReportHook( &msvcrtSilentReportHook );
 #endif // if defined(_MSC_VER)
 
-   // @todo investiguate this handler (for buffer overflow)
+   // @ investiguate this handler (for buffer overflow)
    // _set_security_error_handler
 
 #if defined(_WIN32)

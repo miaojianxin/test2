@@ -22,7 +22,6 @@
 #include <set>
 #include "MessageQueue.h"
 #include "AtomicValue.h"
-#include "Mutex.h"
 
 class MQClientFactory;
 
@@ -40,21 +39,21 @@ public:
 	long long readOffset(MessageQueue& mq, ReadOffsetType type);
 	void persistAll(std::set<MessageQueue>& mqs);
 	void persist(MessageQueue& mq);
-
+        
+	long long ReadOffsetByGroup(const MessageQueue& mq,std::string strGroupName);
 private:
 	/**
-	* 更新Consumer Offset，在Master断网期间，可能会更新到Slave，这里需要优化，或者在Slave端优化， TODO
+	* 更新Consumer Offset，在Master断网期间，可能会更新到Slave，这里需要优化，或者在Slave端优化， 
 	*/
 	void updateConsumeOffsetToBroker(const MessageQueue& mq, long long offset);
-	long long fetchConsumeOffsetFromBroker(MessageQueue& mq);
+	long long fetchConsumeOffsetFromBroker(const MessageQueue& mq);
 	void removeOffset(MessageQueue& mq) ;
 
 private:
 	MQClientFactory* m_pMQClientFactory;
 	std::string m_groupName;
 	AtomicLong m_storeTimesTotal;
-	std::map<MessageQueue, AtomicLong*> m_offsetTable;
-	kpr::Mutex m_tableMutex;
+	std::map<MessageQueue, AtomicLong> m_offsetTable;
 };
 
 #endif

@@ -26,9 +26,6 @@
 #endif
 
 #include <stdlib.h>
-#include <chrono>
-#include <assert.h>
-#include <string>
 
 #ifndef WIN32
 struct timespec CalcAbsTime(long timeout);

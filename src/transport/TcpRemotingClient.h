@@ -57,21 +57,21 @@ public:
 	virtual void start();
 	virtual void shutdown();
 
-	//TODO 可能不需要这个两个函数
+	// 可能不需要这个两个函数
 	void updateNameServerAddressList(const std::list<std::string>& addrs);
 	std::list<std::string> getNameServerAddressList();
 
 	RemotingCommand* invokeSync(const std::string& addr,
-								RemotingCommand* request,
+								RemotingCommand& request,
 								int timeoutMillis) ;
 
 	int invokeAsync(const std::string& addr,
-					RemotingCommand* request,
+					RemotingCommand& request,
 					int timeoutMillis,
 					InvokeCallback* invokeCallback);
 
 	int invokeOneway(const std::string& addr,
-					 RemotingCommand* request,
+					 RemotingCommand& request,
 					 int timeoutMillis);
 
 	void registerProcessor(int requestCode, TcpRequestProcessor* pProcessor);
@@ -97,37 +97,36 @@ public:
 	friend class ProcessDataWork;
 
 private:
-	int SendCmd(TcpTransport* pTts,RemotingCommand* msg,int timeoutMillis);
-	void RemoveTTS(TcpTransport* pTts);
+	int SendCmd(TcpTransport* pTts,RemotingCommand& msg,int timeoutMillis);
 	void ProcessData(std::string* pData);
 	void HandleSocketEvent(fd_set wset);
 	void HandleTimerEvent(unsigned long long tm);
 	void UpdateEvent();
 	void Run();
-	void processMessageReceived(RemotingCommand* pCmd);
+	void processMessageReceived(RemotingCommand* pCmd, ResponseFuture* pResp);
 	void processRequestCommand(RemotingCommand* pCmd);
-	void processResponseCommand(RemotingCommand* pCmd);
+	void processResponseCommand(RemotingCommand* pCmd, ResponseFuture* pResp);
 	TcpTransport* GetAndCreateTransport(const std::string& addr);
 
 	RemotingCommand* invokeSyncImpl(TcpTransport* pTts,
-									RemotingCommand* request,
+									RemotingCommand& request,
 									int timeoutMillis) ;
 
 	int invokeAsyncImpl(TcpTransport* pTts,
-						RemotingCommand* request,
+						RemotingCommand& request,
 						int timeoutMillis,
 						InvokeCallback* pInvokeCallback);
 
 	int invokeOnewayImpl(TcpTransport* pTts,
-						 RemotingCommand* request,
+						 RemotingCommand& request,
 						 int timeoutMillis);
 
 private:
 	bool m_stop;
 	fd_set m_rset;
 	SOCKET m_maxFd;
-	kpr::Mutex m_tcpTransportTableMutex;
-	kpr::Mutex m_responseTableMutex;
+	kpr::Mutex m_mutex;
+    kpr::Mutex m_mutexResp; /* added by yugj at 2015-08-13 */
 
 	std::map<int,ResponseFuture*> m_responseTable;
 	std::map<std::string ,TcpTransport*> m_tcpTransportTable;

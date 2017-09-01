@@ -51,6 +51,10 @@ DefaultMQProducer::DefaultMQProducer(const std::string& producerGroup)
 	m_pDefaultMQProducerImpl = new DefaultMQProducerImpl(this);
 }
 
+DefaultMQProducer::~DefaultMQProducer()
+{
+}
+
 void DefaultMQProducer::start()
 {
 	m_pDefaultMQProducerImpl->start();
@@ -149,7 +153,7 @@ long long DefaultMQProducer::earliestMsgStoreTime(const MessageQueue& mq)
 	return m_pDefaultMQProducerImpl->earliestMsgStoreTime(mq);
 }
 
-MessageExt DefaultMQProducer::viewMessage(const std::string& msgId)
+MessageExt* DefaultMQProducer::viewMessage(const std::string& msgId)
 {
 	return m_pDefaultMQProducerImpl->viewMessage(msgId);
 }
@@ -207,6 +211,18 @@ void DefaultMQProducer::setCompressMsgBodyOverHowmuch(int compressMsgBodyOverHow
 DefaultMQProducerImpl* DefaultMQProducer::getDefaultMQProducerImpl()
 {
 	return m_pDefaultMQProducerImpl;
+}
+
+void DefaultMQProducer::setTcpTimeoutMilliseconds(int milliseconds)
+{
+	NULL == m_pDefaultMQProducerImpl ?
+		NULL:
+		(m_pDefaultMQProducerImpl->setTcpTimeoutMilliseconds(milliseconds), NULL);
+}
+
+int DefaultMQProducer::getTcpTimeoutMilliseconds()
+{
+	return m_pDefaultMQProducerImpl->getTcpTimeoutMilliseconds();
 }
 
 bool DefaultMQProducer::isRetryAnotherBrokerWhenNotStoreOK()

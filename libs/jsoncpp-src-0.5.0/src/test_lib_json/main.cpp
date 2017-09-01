@@ -16,26 +16,26 @@
 
 struct ValueTest : JsonTest::TestCase
 {
-   Json::Value null_;
-   Json::Value emptyArray_;
-   Json::Value emptyObject_;
-   Json::Value integer_;
-   Json::Value unsignedInteger_;
-   Json::Value smallUnsignedInteger_;
-   Json::Value real_;
-   Json::Value array1_;
-   Json::Value object1_;
-   Json::Value emptyString_;
-   Json::Value string1_;
-   Json::Value string_;
-   Json::Value true_;
-   Json::Value false_;
+   MQJson::Value null_;
+   MQJson::Value emptyArray_;
+   MQJson::Value emptyObject_;
+   MQJson::Value integer_;
+   MQJson::Value unsignedInteger_;
+   MQJson::Value smallUnsignedInteger_;
+   MQJson::Value real_;
+   MQJson::Value array1_;
+   MQJson::Value object1_;
+   MQJson::Value emptyString_;
+   MQJson::Value string1_;
+   MQJson::Value string_;
+   MQJson::Value true_;
+   MQJson::Value false_;
 
    ValueTest()
-      : emptyArray_( Json::arrayValue )
-      , emptyObject_( Json::objectValue )
+      : emptyArray_( MQJson::arrayValue )
+      , emptyObject_( MQJson::objectValue )
       , integer_( 123456789 )
-      , smallUnsignedInteger_( Json::Value::UInt( Json::Value::maxInt ) )
+      , smallUnsignedInteger_( MQJson::Value::UInt( MQJson::Value::maxInt ) )
       , unsignedInteger_( 34567890u )
       , real_( 1234.56789 )
       , emptyString_( "" )
@@ -65,11 +65,11 @@ struct ValueTest : JsonTest::TestCase
       bool isNull_;
    };
 
-   void checkConstMemberCount( const Json::Value &value, unsigned int expectedCount );
+   void checkConstMemberCount( const MQJson::Value &value, unsigned int expectedCount );
 
-   void checkMemberCount( Json::Value &value, unsigned int expectedCount );
+   void checkMemberCount( MQJson::Value &value, unsigned int expectedCount );
 
-   void checkIs( const Json::Value &value, const IsCheck &check );
+   void checkIs( const MQJson::Value &value, const IsCheck &check );
 };
 
 
@@ -168,29 +168,29 @@ JSONTEST_FIXTURE( ValueTest, isUInt )
 
 
 void
-ValueTest::checkConstMemberCount( const Json::Value &value, unsigned int expectedCount )
+ValueTest::checkConstMemberCount( const MQJson::Value &value, unsigned int expectedCount )
 {
    unsigned int count = 0;
-   Json::Value::const_iterator itEnd = value.end();
-   for ( Json::Value::const_iterator it = value.begin(); it != itEnd; ++it )
+   MQJson::Value::const_iterator itEnd = value.end();
+   for ( MQJson::Value::const_iterator it = value.begin(); it != itEnd; ++it )
    {
       ++count;
    }
-   JSONTEST_ASSERT_EQUAL( expectedCount, count ) << "Json::Value::const_iterator";
+   JSONTEST_ASSERT_EQUAL( expectedCount, count ) << "MQJson::Value::const_iterator";
 }
 
 void
-ValueTest::checkMemberCount( Json::Value &value, unsigned int expectedCount )
+ValueTest::checkMemberCount( MQJson::Value &value, unsigned int expectedCount )
 {
    JSONTEST_ASSERT_EQUAL( expectedCount, value.size() );
 
    unsigned int count = 0;
-   Json::Value::iterator itEnd = value.end();
-   for ( Json::Value::iterator it = value.begin(); it != itEnd; ++it )
+   MQJson::Value::iterator itEnd = value.end();
+   for ( MQJson::Value::iterator it = value.begin(); it != itEnd; ++it )
    {
       ++count;
    }
-   JSONTEST_ASSERT_EQUAL( expectedCount, count ) << "Json::Value::iterator";
+   JSONTEST_ASSERT_EQUAL( expectedCount, count ) << "MQJson::Value::iterator";
 
    JSONTEST_ASSERT_PRED( checkConstMemberCount(value, expectedCount) );
 }
@@ -212,7 +212,7 @@ ValueTest::IsCheck::IsCheck()
 
 
 void 
-ValueTest::checkIs( const Json::Value &value, const IsCheck &check )
+ValueTest::checkIs( const MQJson::Value &value, const IsCheck &check )
 {
    JSONTEST_ASSERT_EQUAL( check.isObject_, value.isObject() );
    JSONTEST_ASSERT_EQUAL( check.isArray_, value.isArray() );

@@ -16,11 +16,11 @@
 
 #include "SocketUtil.h"
 #include <stdlib.h>
+#include <stdio.h>
 #include <assert.h>
 #include <string.h>
 #include <sstream>
 #include <vector>
-#include <iostream>
 
 int SocketInit()
 {
@@ -76,8 +76,6 @@ bool SplitURL(const std::string& serverURL, std::string &addr, short &nPort)
 	if (0 == addr.compare("localhost"))
 	{
 		addr = "127.0.0.1";
-	} else {
-		addr = MixAll::filterIP(addr);
 	}
 
 	pos ++;
@@ -288,12 +286,26 @@ std::string getHostName(sockaddr addr)
 }
 
 
+
+
+
 unsigned long long swapll(unsigned long long v)
 {
-#ifdef ENDIANMODE_BIG
-	return v;
-#else
-	unsigned long long ret = ((v << 56) 
+
+	//mjx aix compile modify
+	//大小端方法判断修改
+	int i = 0x12345678; 
+
+	if(*((char*)&i) == 0x12)  
+
+	{
+		return v;
+	}
+
+	else
+		
+	{
+		unsigned long long ret = ((v << 56) 
 								| ((v & 0xff00) << 40)
 								| ((v & 0xff0000) << 24)
 								| ((v & 0xff000000) << 8)
@@ -301,9 +313,11 @@ unsigned long long swapll(unsigned long long v)
 								| ((v >> 24 ) & 0xff0000)
 								| ((v >> 40 ) & 0xff00)
 								| (v >> 56 ));
+		return ret;
 
-	return ret;
-#endif
+	}
+
+	
 }
 
 unsigned long long h2nll(unsigned long long v)
@@ -326,87 +340,4 @@ std::string socketAddress2IPPort( sockaddr addr )
 
 	std::string ipport = tmp;
 	return ipport;
-}
-
-void load_certificate(SSL_CTX* ctx, char const * cacert, char const * cakey, char const * trustCALocation) {
-    if (SSL_CTX_use_certificate_file(ctx, cacert, SSL_FILETYPE_PEM) <= 0) {
-		Logger::get_logger()->error("Failed to apply public certeificate");
-        abort();
-    }
-
-    if(SSL_CTX_use_PrivateKey_file(ctx, cakey, SSL_FILETYPE_PEM) <= 0) {
-		Logger::get_logger()->error("Failed to apply private key.");
-        abort();
-    }
-
-    if (SSL_CTX_check_private_key(ctx) <= 0) {
-		Logger::get_logger()->error("Private key does not match the public certificate.");
-        abort();
-    }
-
-    /*
-     * @param CAfile
-     * A pointer to the name of the file that contains the certificates of the trusted CAs and CRLs.
-     * The file must be in base64 privacy enhanced mail (PEM) format.
-     * The value of this parameter can be NULL if the value of the CApath parameter is not NULL.
-     * The maximum length is 255 characters.
-     *
-     * @param CApath
-     * A pointer to the name of the directory that contains the certificates of the trusted CAs and CRLs.
-     * The files in the directory must be in PEM format.
-     * The value of this parameter can be NULL if the value of the CAfile parameter is not NULL.
-     * The maximum length is 255 characters.
-     */
-    SSL_CTX_load_verify_locations(ctx, NULL, trustCALocation);
-    SSL_CTX_set_verify_depth(ctx, 5);
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
-	Logger::get_logger()->info("Load Certificate Successfully");
-}
-
-SSL_CTX* initializeSSL() {
-	SSL_library_init();
-	SSL_load_error_strings();
-	ERR_load_BIO_strings();
-	OpenSSL_add_all_algorithms(); // load and register all encryption algorithms.
-	SSL_CTX* ctx = SSL_CTX_new(SSLv23_method());
-	char const * client_certificate = "/dianyi/config/RocketMQ/SSL/client.pem";
-	char const * client_private_key = "/dianyi/config/RocketMQ/SSL/client.pkey";
-	char const * cacerts = "/dianyi/config/RocketMQ/SSL/";
-
-    load_certificate(ctx, //SSL_CTX*
-					 client_certificate, // public CA certificate
-                     client_private_key, // private CA  key
-                     cacerts // trust CA certificates
-
-    );
-
-	return ctx;
-}
-
-void destroySSL() {
-	ERR_free_strings();
-	EVP_cleanup();
-}
-
-void show_certificate(SSL* ssl) {
-    X509 *cert;
-    char *line;
-    cert = SSL_get_peer_certificate(ssl); /* Get certificates (if available) */
-    if ( cert != NULL ) {
-		Logger::get_logger()->info("Server certificates:");
-		line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
-		Logger::get_logger()->info("Subject: {}", line);
-		free(line);
-        line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
-		Logger::get_logger()->info("Issuer: {}", line);
-        free(line);
-        X509_free(cert);
-    } else {
-		Logger::get_logger()->warn("No certificates.");
-    }
-}
-
-void shutdownSSL(SSL * ssl) {
-	SSL_shutdown(ssl);
-	SSL_free(ssl);
 }

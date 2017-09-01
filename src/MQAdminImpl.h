@@ -47,8 +47,8 @@ public:
 	long long minOffset(const MessageQueue& mq);
 
 	long long earliestMsgStoreTime(const MessageQueue& mq);
-
-	MessageExt viewMessage(const std::string& msgId);
+	//返回指针，需要由业务侧调用析构指针
+	MessageExt* viewMessage(const std::string& msgId);
 
 	QueryResult queryMessage(const std::string& topic,
 							 const std::string& key,
@@ -56,8 +56,13 @@ public:
 							 long long begin,
 							 long long end);
 
+	void setTcpTimeoutMillseconds(int milliseconds);
+	int getTcpTimoutMilliseconds();
 private:
 	MQClientFactory* m_pMQClientFactory;
+
+	//add by lin.qiongshan, 2016-9-2，TCP 操作超时时间配置化
+	int m_tcpTimeoutMillseconds;
 };
 
 #endif

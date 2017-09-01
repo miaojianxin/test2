@@ -21,19 +21,48 @@
 #include "PullRequest.h"
 #include "DefaultMQPushConsumerImpl.h"
 #include "ScopedLock.h"
+#include "UtilAll.h"
+
+
+
+/* modified by yu.guangjie at 2015-08-16, reason: add PullMessageLater*/
+class PullMessageLater : public kpr::TimerHandler
+{
+public:
+	PullMessageLater(PullRequest* pPullRequest,PullMessageService* pService)
+        :m_pPullRequest(pPullRequest),
+		m_pService(pService)
+	{
+
+	}
+
+	void OnTimeOut(unsigned int timerID)
+	{
+		m_pService->executePullRequestImmediately(m_pPullRequest);
+
+		delete this;
+	}
+
+private:
+    PullRequest* m_pPullRequest;
+	PullMessageService* m_pService;
+};
 
 
 PullMessageService::PullMessageService(MQClientFactory* pMQClientFactory)
 	:ServiceThread("PullMessageService"),
 	 m_pMQClientFactory(pMQClientFactory)
 {
-	m_TimeThread = new kpr::TimerThread("PullMessageService-timer",1000);
+    /* modified by yu.guangjie at 2015-08-16, reason: add timer*/
+    m_scheduledService = new kpr::TimerThread("PullMessageServiceTimer",1000);
+    m_scheduledService->Start();
 }
 
 
 PullMessageService::~PullMessageService()
 {
-
+    m_scheduledService->Close();
+    delete m_scheduledService;
 }
 
 /**
@@ -41,9 +70,10 @@ PullMessageService::~PullMessageService()
 */
 void PullMessageService::executePullRequestLater(PullRequest* pPullRequest, long timeDelay)
 {
-	MyTimeHandler* handler = new MyTimeHandler(this,pPullRequest);
-	
-	m_TimeThread->RegisterTimer(0,timeDelay,handler,false);
+    /* modified by yu.guangjie at 2015-08-16, reason: execute later*/
+    PullMessageLater* pm = new PullMessageLater(pPullRequest, this);
+
+	m_scheduledService->RegisterTimer(0,timeDelay,pm,false);
 }
 
 
@@ -52,14 +82,15 @@ void PullMessageService::executePullRequestLater(PullRequest* pPullRequest, long
 */
 void PullMessageService::executePullRequestImmediately(PullRequest* pPullRequest)
 {
+    /* modified by yu.guangjie at 2015-08-16, reason: add lock*/
+    kpr::ScopedLock<kpr::Mutex> lock(m_mutexQueue);
 	try
 	{
-		{
-			kpr::ScopedLock<kpr::Mutex> lock(m_lock);
-			m_pullRequestQueue.push_back(pPullRequest);
-		}
-
-		wakeup();
+		m_pullRequestQueue.push_back(pPullRequest);
+        if(m_pullRequestQueue.size() == 1)
+        {
+            wakeup();
+        }
 	}
 	catch (...)
 	{
@@ -68,38 +99,34 @@ void PullMessageService::executePullRequestImmediately(PullRequest* pPullRequest
 
 void PullMessageService::Run()
 {
+    PullRequest* pullRequest = NULL;
 	while (!m_stoped)
 	{
 		try
 		{
-			bool wait = false;
-
+			if (m_pullRequestQueue.empty())
 			{
-				kpr::ScopedLock<kpr::Mutex> lock(m_lock);
-				if (m_pullRequestQueue.empty())
+                /* modified by yu.guangjie at 2015-08-29, reason: change sleep to Wait */
+				//Sleep(1000);
+				waitForRunning(100);
+			}
+
+			if (!m_pullRequestQueue.empty())
+			{
+                {
+                    kpr::ScopedLock<kpr::Mutex> lock(m_mutexQueue);
+                    pullRequest = m_pullRequestQueue.front();
+                }
+				
+				if (pullRequest != NULL)
 				{
-					wait = true;
+					pullMessage(pullRequest);
 				}
-			}
-			
-			if (wait)
-			{
-				waitForRunning(5000);
-			}
-
-			PullRequest* pullRequest=NULL;
-			{
-				kpr::ScopedLock<kpr::Mutex> lock(m_lock);
-				if (!m_pullRequestQueue.empty())
-				{
-					pullRequest = m_pullRequestQueue.front();
-					m_pullRequestQueue.pop_front();
-				}
-			}
-
-			if (pullRequest != NULL)
-			{
-				pullMessage(pullRequest);
+                
+                {
+                    kpr::ScopedLock<kpr::Mutex> lock(m_mutexQueue);
+                    m_pullRequestQueue.pop_front();
+                }				
 			}
 		}
 		catch (...)
@@ -107,9 +134,6 @@ void PullMessageService::Run()
 
 		}
 	}
-
-	m_TimeThread->Close();
-	m_TimeThread->Join();
 }
 
 std::string PullMessageService::getServiceName()
@@ -128,6 +152,9 @@ void PullMessageService::pullMessage(PullRequest* pPullRequest)
 	}
 	else
 	{
-		Logger::get_logger()->error("Unable to find consumer instance from MQClientFactory");
+		//TODO
+		MqLogWarn("pullMessage(): no consumer for ConsumerGroup[%s]", 
+		    pPullRequest->getConsumerGroup().c_str());
 	}
 }
+

@@ -38,16 +38,16 @@ class ConsumeMessageConcurrentlyService;
 class ConsumeConcurrentlyRequest: public ThreadPoolWork
 {
 public:
-	ConsumeConcurrentlyRequest(std::list<MessageExt*>& msgs,
+	ConsumeConcurrentlyRequest(std::list<MessageExt*>* pMsgs,
 		ProcessQueue* pProcessQueue,
-		MessageQueue& messageQueue,
+		MessageQueue* pMessageQueue,
 		ConsumeMessageConcurrentlyService* pService);
 	~ConsumeConcurrentlyRequest();
 	virtual void Do();
 
-	std::list<MessageExt*>& getMsgs()
+	std::list<MessageExt*>* getMsgs()
 	{
-		return m_msgs;
+		return m_pMsgs;
 	}
 
 	ProcessQueue* getProcessQueue()
@@ -55,18 +55,18 @@ public:
 		return m_pProcessQueue;
 	}
 
-	MessageQueue getMessageQueue()
+	MessageQueue* getMessageQueue()
 	{
-		return m_messageQueue;
+		return m_pMessageQueue;
 	}
 
 private:
-	void resetRetryTopic(std::list<MessageExt*>& msgs);
+	void resetRetryTopic(std::list<MessageExt*>* pMsgs);
 
 private:
-	std::list<MessageExt*> m_msgs;
+	std::list<MessageExt*>* m_pMsgs;
 	ProcessQueue* m_pProcessQueue;
-	MessageQueue m_messageQueue;
+	MessageQueue* m_pMessageQueue;
 	ConsumeMessageConcurrentlyService* m_pService;
 };
 
@@ -90,13 +90,13 @@ public:
 	/**
 	* 在Consumer本地定时线程中定时重试
 	*/
-	void submitConsumeRequestLater(std::list<MessageExt*>& pMsgs,
+	void submitConsumeRequestLater(std::list<MessageExt*>* pMsgs,
 		ProcessQueue* pProcessQueue,
-		MessageQueue& messageQueue);
+		MessageQueue* pMessageQueue);
 
-	void submitConsumeRequest(std::list<MessageExt*>& pMsgs,
+	void submitConsumeRequest(std::list<MessageExt*>* pMsgs,
 		ProcessQueue* pProcessQueue,
-		MessageQueue& messageQueue,
+		MessageQueue* pMessageQueue,
 		bool dispathToConsume);
 
 	void updateCorePoolSize(int corePoolSize);

@@ -47,7 +47,8 @@ public:
 	~DefaultMQPullConsumerImpl();
 	void createTopic(const std::string& key, const std::string& newTopic, int queueNum);
 	long long fetchConsumeOffset(MessageQueue& mq, bool fromStore);
-	std::set<MessageQueue*> fetchMessageQueuesInBalance(const std::string& topic);
+	//lin.qs, 原先返回的是 set<MessageQueue*>，指针引用内部可能变化的资源，不允许
+	std::set<MessageQueue> fetchMessageQueuesInBalance(const std::string& topic);
 	std::vector<MessageQueue>* fetchPublishMessageQueues(const std::string&  topic);
 	std::set<MessageQueue>* fetchSubscribeMessageQueues(const std::string& topic);
 	long long earliestMsgStoreTime(const MessageQueue& mq);
@@ -93,12 +94,15 @@ public:
 	void sendMessageBack(MessageExt& msg, int delayLevel);
 	void shutdown();
 	void updateConsumeOffset(MessageQueue& mq, long long offset);
-	MessageExt viewMessage(const std::string& msgId);
+	//返回指针，需要由业务侧调用析构指针
+	MessageExt* viewMessage(const std::string& msgId);
 	DefaultMQPullConsumer* getDefaultMQPullConsumer();
 	OffsetStore* getOffsetStore();
 	void setOffsetStore(OffsetStore* pOffsetStore);
 	void start();
 
+	void setTcpTimeoutMilliseconds(int milliseconds);
+	int getTcpTimeoutMilliseconds();
 private:
 	void makeSureStateOK();
 	void subscriptionAutomatically(const std::string& topic);
@@ -125,6 +129,9 @@ private:
 	OffsetStore* m_pOffsetStore; // 消费进度存储
 	RebalanceImpl* m_pRebalanceImpl;// Rebalance实现
 	friend class DefaultMQPullConsumerImplCallback;
+
+	//add by lin.qiongshan, 2016年9月2日09:47:04, TCP操作超时时间配置化
+	int m_tcpTimeoutMilliSeconds;
 };
 
 class DefaultMQPullConsumerImplCallback : public PullCallback

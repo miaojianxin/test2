@@ -22,9 +22,6 @@
 #include "UtilAll.h"
 #include "MixAll.h"
 
-
-const std::string ClientConfig::CLIENT_ID_IP_NAME_SEPARATOR = "@";
-
 ClientConfig::ClientConfig()
 {
 	char* addr = getenv(MixAll::NAMESRV_ADDR_ENV.c_str());
@@ -40,9 +37,12 @@ ClientConfig::ClientConfig()
 	m_clientIP = getLocalAddress();
 	m_instanceName = "DEFAULT";
 	m_clientCallbackExecutorThreads = UtilAll::availableProcessors();
-	m_pollNameServerInterval = 1000 * 30;
+	m_pollNameServerInteval = 1000 * 30;
 	m_heartbeatBrokerInterval = 1000 * 30;
 	m_persistConsumerOffsetInterval = 1000 * 5;
+
+	//mjx namesrv,onsaddr modify
+	m_onsAddr  = "";
 }
 
 ClientConfig::~ClientConfig()
@@ -51,16 +51,20 @@ ClientConfig::~ClientConfig()
 
 std::string ClientConfig::buildMQClientId()
 {
-	return m_clientIP + CLIENT_ID_IP_NAME_SEPARATOR + m_instanceName;
+	return m_clientIP+"@"+m_instanceName;
 }
 
 void ClientConfig::resetClientConfig(const ClientConfig& cc)
 {
 	m_namesrvAddr = cc.m_namesrvAddr;
+	
+	//mjx namesrv,onsaddr modify
+	m_onsAddr = cc.m_onsAddr;
+	
 	m_clientIP = cc.m_clientIP;
 	m_instanceName = cc.m_instanceName;
 	m_clientCallbackExecutorThreads = cc.m_clientCallbackExecutorThreads;
-	m_pollNameServerInterval = cc.m_pollNameServerInterval;
+	m_pollNameServerInteval = cc.m_pollNameServerInteval;
 	m_heartbeatBrokerInterval = cc.m_heartbeatBrokerInterval;
 	m_persistConsumerOffsetInterval = cc.m_persistConsumerOffsetInterval;
 }
@@ -79,6 +83,19 @@ void ClientConfig::setNamesrvAddr(const std::string& namesrvAddr)
 {
 	m_namesrvAddr = namesrvAddr;
 }
+
+//mjx namesrv,onsaddr modify
+
+std::string ClientConfig::getNSAddr()
+{
+	return m_onsAddr;
+}
+
+void ClientConfig::setNSAddr(const std::string& onsAddr)
+{
+	m_onsAddr = onsAddr;
+}
+
 
 std::string ClientConfig::getClientIP()
 {
@@ -110,14 +127,14 @@ void ClientConfig::setClientCallbackExecutorThreads(int clientCallbackExecutorTh
 	m_clientCallbackExecutorThreads = clientCallbackExecutorThreads;
 }
 
-int ClientConfig::getPollNameServerInterval()
+int ClientConfig::getPollNameServerInteval()
 {
-	return m_pollNameServerInterval;
+	return m_pollNameServerInteval;
 }
 
-void ClientConfig::setPollNameServerInterval(int pollNameServerInterval)
+void ClientConfig::setPollNameServerInteval(int pollNameServerInteval)
 {
-	m_pollNameServerInterval = pollNameServerInterval;
+	m_pollNameServerInteval = pollNameServerInteval;
 }
 
 int ClientConfig::getHeartbeatBrokerInterval()
@@ -139,3 +156,45 @@ void ClientConfig::setPersistConsumerOffsetInterval(int persistConsumerOffsetInt
 {
 	m_persistConsumerOffsetInterval = persistConsumerOffsetInterval;
 }
+
+int ClientConfig::getLogLevel()
+{
+    return UtilAll::GetLogLevel();
+}
+
+void ClientConfig::setLogLevel(int iLevel)
+{
+    UtilAll::SetLogLevel(iLevel);
+}
+
+void ClientConfig::changeInstanceNameToPID()
+{
+	if (m_instanceName == "DEFAULT") 
+	{
+		m_instanceName = UtilAll::getPidStr();
+	}
+}
+
+
+//mjx test modify
+//跟封装的阿里mq保持一致,在zmq里面无意义
+std::string ClientConfig::getAccessKey()
+{
+    return m_accessKey;
+}
+
+void ClientConfig::setAccessKey(const std::string& accessKey)
+{
+    m_accessKey = accessKey;
+}
+
+std::string ClientConfig::getSecretKey()
+{
+    return m_secretKey;
+}
+
+void ClientConfig::setSecretKey(const std::string& secretKey)
+{
+    m_secretKey = secretKey;
+}
+

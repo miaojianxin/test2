@@ -27,29 +27,29 @@ readInputTestFile( const char *path )
 
 
 static void
-printValueTree( FILE *fout, Json::Value &value, const std::string &path = "." )
+printValueTree( FILE *fout, MQJson::Value &value, const std::string &path = "." )
 {
    switch ( value.type() )
    {
-   case Json::nullValue:
+   case MQJson::nullValue:
       fprintf( fout, "%s=null\n", path.c_str() );
       break;
-   case Json::intValue:
+   case MQJson::intValue:
       fprintf( fout, "%s=%d\n", path.c_str(), value.asInt() );
       break;
-   case Json::uintValue:
+   case MQJson::uintValue:
       fprintf( fout, "%s=%u\n", path.c_str(), value.asUInt() );
       break;
-   case Json::realValue:
+   case MQJson::realValue:
       fprintf( fout, "%s=%.16g\n", path.c_str(), value.asDouble() );
       break;
-   case Json::stringValue:
+   case MQJson::stringValue:
       fprintf( fout, "%s=\"%s\"\n", path.c_str(), value.asString().c_str() );
       break;
-   case Json::booleanValue:
+   case MQJson::booleanValue:
       fprintf( fout, "%s=%s\n", path.c_str(), value.asBool() ? "true" : "false" );
       break;
-   case Json::arrayValue:
+   case MQJson::arrayValue:
       {
          fprintf( fout, "%s=[]\n", path.c_str() );
          int size = value.size();
@@ -61,13 +61,13 @@ printValueTree( FILE *fout, Json::Value &value, const std::string &path = "." )
          }
       }
       break;
-   case Json::objectValue:
+   case MQJson::objectValue:
       {
          fprintf( fout, "%s={}\n", path.c_str() );
-         Json::Value::Members members( value.getMemberNames() );
+         MQJson::Value::Members members( value.getMemberNames() );
          std::sort( members.begin(), members.end() );
          std::string suffix = *(path.end()-1) == '.' ? "" : ".";
-         for ( Json::Value::Members::iterator it = members.begin(); 
+         for ( MQJson::Value::Members::iterator it = members.begin(); 
                it != members.end(); 
                ++it )
          {
@@ -86,11 +86,11 @@ static int
 parseAndSaveValueTree( const std::string &input, 
                        const std::string &actual,
                        const std::string &kind,
-                       Json::Value &root,
-                       const Json::Features &features,
+                       MQJson::Value &root,
+                       const MQJson::Features &features,
                        bool parseOnly )
 {
-   Json::Reader reader( features );
+   MQJson::Reader reader( features );
    bool parsingSuccessful = reader.parse( input, root );
    if ( !parsingSuccessful )
    {
@@ -117,12 +117,12 @@ parseAndSaveValueTree( const std::string &input,
 
 static int
 rewriteValueTree( const std::string &rewritePath, 
-                  const Json::Value &root, 
+                  const MQJson::Value &root, 
                   std::string &rewrite )
 {
    //Json::FastWriter writer;
    //writer.enableYAMLCompatibility();
-   Json::StyledWriter writer;
+   MQJson::StyledWriter writer;
    rewrite = writer.write( root );
    FILE *fout = fopen( rewritePath.c_str(), "wt" );
    if ( !fout )
@@ -158,7 +158,7 @@ printUsage( const char *argv[] )
 
 int
 parseCommandLine( int argc, const char *argv[], 
-                  Json::Features &features, std::string &path,
+                  MQJson::Features &features, std::string &path,
                   bool &parseOnly )
 {
    parseOnly = false;
@@ -170,7 +170,7 @@ parseCommandLine( int argc, const char *argv[],
    int index = 1;
    if ( std::string(argv[1]) == "--json-checker" )
    {
-      features = Json::Features::strictMode();
+      features = MQJson::Features::strictMode();
       parseOnly = true;
       ++index;
    }
@@ -188,7 +188,7 @@ parseCommandLine( int argc, const char *argv[],
 int main( int argc, const char *argv[] )
 {
    std::string path;
-   Json::Features features;
+   MQJson::Features features;
    bool parseOnly;
    int exitCode = parseCommandLine( argc, argv, features, path, parseOnly );
    if ( exitCode != 0 )
@@ -214,7 +214,7 @@ int main( int argc, const char *argv[] )
    std::string rewritePath = basePath + ".rewrite";
    std::string rewriteActualPath = basePath + ".actual-rewrite";
 
-   Json::Value root;
+   MQJson::Value root;
    exitCode = parseAndSaveValueTree( input, actualPath, "input", root, features, parseOnly );
    if ( exitCode == 0  &&  !parseOnly )
    {
@@ -222,7 +222,7 @@ int main( int argc, const char *argv[] )
       exitCode = rewriteValueTree( rewritePath, root, rewrite );
       if ( exitCode == 0 )
       {
-         Json::Value rewriteRoot;
+         MQJson::Value rewriteRoot;
          exitCode = parseAndSaveValueTree( rewrite, rewriteActualPath, 
             "rewrite", rewriteRoot, features, parseOnly );
       }

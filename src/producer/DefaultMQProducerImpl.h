@@ -19,12 +19,14 @@
 
 #include <list>
 #include <vector>
+#include "Mutex.h"
 #include "MQProducerInner.h"
 #include "QueryResult.h"
 #include "ServiceState.h"
 #include "CommunicationMode.h"
 #include "SendResult.h"
 #include "MQClientException.h"
+#include "MessageQueueSelector.h"
 
 class DefaultMQProducer;
 class SendMessageHook;
@@ -48,6 +50,7 @@ class DefaultMQProducerImpl : public MQProducerInner
 {
 public:
 	DefaultMQProducerImpl(DefaultMQProducer* pDefaultMQProducer);
+    virtual ~DefaultMQProducerImpl();
 	void initTransactionEnv();
 	void destroyTransactionEnv();
 
@@ -82,8 +85,9 @@ public:
 	long long minOffset(const MessageQueue& mq);
 
 	long long earliestMsgStoreTime(const MessageQueue& mq);
-
-	MessageExt viewMessage(const std::string& msgId);
+	
+	//返回指针，需要由业务侧调用析构指针
+	MessageExt* viewMessage(const std::string& msgId);
 	QueryResult queryMessage(const std::string& topic,
 							 const std::string& key,
 							 int maxNum,
@@ -144,6 +148,8 @@ public:
 	int getZipCompressLevel();
 	void setZipCompressLevel(int zipCompressLevel);
 
+	void setTcpTimeoutMilliseconds(int milliseconds);
+	int getTcpTimeoutMilliseconds();
 private:
 	SendResult sendSelectImpl(Message& msg,
 							  MessageQueueSelector* selector,
@@ -170,7 +176,10 @@ private:
 	/**
 	* 尝试寻找Topic路由信息，如果没有则到Name Server上找，再没有，则取默认Topic
 	*/
-	TopicPublishInfo tryToFindTopicPublishInfo(const std::string& topic) ;
+	TopicPublishInfo& tryToFindTopicPublishInfo(const std::string& topic) ;
+
+    MessageQueue tryToFindTopicPublishMq(
+        const std::string& topic, const std::string lastBrokerName);
 
 	bool tryToCompressMessage(Message& msg);
 
@@ -178,10 +187,15 @@ protected:
 	//TODO 事务相关队列 及 检测线程
 
 private:
+	//add by lin.qiongshan, 2016-9-2, TCP 超时配置化
+	int m_tcpTimeoutMilliseconds;
+
 	int m_zipCompressLevel;// 消息压缩level，默认5
 
 	DefaultMQProducer* m_pDefaultMQProducer;
 	std::map<std::string, TopicPublishInfo> m_topicPublishInfoTable;
+    kpr::Mutex m_topicTableLock;
+    
 	ServiceState m_serviceState;
 	MQClientFactory* m_pMQClientFactory;
 	std::list<SendMessageHook*> m_hookList;//发送每条消息会回调

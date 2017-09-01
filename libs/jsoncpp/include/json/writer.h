@@ -6,7 +6,8 @@
 # include <string>
 # include <iostream>
 
-namespace Json {
+/* modified by yu.guangjie at 2015-10-14, reason: change Json to MQJson*/
+namespace MQJson {
 
    class Value;
 

@@ -36,7 +36,7 @@
 #include "TopAddressing.h"
 #include "HeartbeatData.h"
 #include "LockBatchBody.h"
-#include  "Logger.h"
+#include "MessageDecoder.h"
 
 class TcpRemotingClient;
 class QueryConsumerOffsetRequestHeader;
@@ -54,6 +54,7 @@ class RemotingCommand;
 class PullCallback;
 class SendCallback;
 class ClientRemotingProcessor;
+class MessageDecoder;
 
 /**
 * 封装所有与服务器通信部分API
@@ -96,8 +97,8 @@ public:
 							int timeoutMillis,
 							CommunicationMode communicationMode,
 							PullCallback* pPullCallback);
-
-	MessageExt viewMessage( const std::string& addr, long long phyoffset, int timeoutMillis);
+	//返回指针，需要由业务侧调用析构指针
+	MessageExt* viewMessage( const std::string& addr, long long phyoffset, int timeoutMillis);
 
 	/**
 	* 根据时间查询Offset
@@ -194,7 +195,7 @@ public:
 					  InvokeCallback* pInvokeCallback);
 
 	bool registerClient( const std::string& addr,
-						 HeartbeatData heartbeat,
+						 HeartbeatData* pHeartbeatData,
 						 int timeoutMillis);
 
 	/**
@@ -334,35 +335,35 @@ public:
 
 	TcpRemotingClient* getRemotingClient();
 
-	SendResult* processSendResponse(const std::string& brokerName,
-		const std::string& topic,
-		RemotingCommand* pResponse);
-
-	PullResult* processPullResponse(RemotingCommand* pResponse);
-
 private:
 	SendResult* sendMessageSync(const std::string& addr,
 								const std::string& brokerName,
 								Message& msg,
 								int timeoutMillis,
-								RemotingCommand* request);
+								RemotingCommand& request);
 
 	void sendMessageAsync(const std::string& addr,
 							const std::string& brokerName,
 							Message& msg,
 							int timeoutMillis,
-							RemotingCommand* request,
+							RemotingCommand& request,
 							SendCallback* pSendCallback);
 
 	void pullMessageAsync(const std::string& addr,
 							RemotingCommand* pRequest,
 							int timeoutMillis,
 							PullCallback* pPullCallback);
+	
 
 	PullResult* pullMessageSync(const std::string& addr,
 								RemotingCommand* pRequest,
 								int timeoutMillis);
-
+public:
+    PullResult* processPullResponse(RemotingCommand* pResponse);
+	SendResult* processSendResponse(const std::string& brokerName,
+									Message& msg,
+									RemotingCommand* pResponse);
+    
 private:
 
 	TcpRemotingClient* m_pRemotingClient;

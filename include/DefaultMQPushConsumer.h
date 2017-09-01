@@ -46,7 +46,8 @@ public:
 	long long maxOffset(const MessageQueue& mq);
 	long long minOffset(const MessageQueue& mq);
 	long long earliestMsgStoreTime(const MessageQueue& mq);
-	MessageExt viewMessage(const std::string& msgId);
+	//返回指针，需要由业务侧调用析构指针
+	MessageExt* viewMessage(const std::string& msgId);
 	QueryResult queryMessage(const std::string& topic,
 							 const std::string&  key,
 							 int maxNum,
@@ -56,6 +57,8 @@ public:
 	// MQadmin end
 
 	AllocateMessageQueueStrategy* getAllocateMessageQueueStrategy();
+
+	//Note by lin.qiongshan, Consumer 对象析构时，会删除涉及进去的 AllocateMessageQueueStrategy 指针，因此外部不要维护该对象的生命周期
 	void setAllocateMessageQueueStrategy(AllocateMessageQueueStrategy* pAllocateMessageQueueStrategy);
 	
 	int getConsumeConcurrentlyMaxSpan();
@@ -77,6 +80,7 @@ public:
 	void setConsumeThreadMin(int consumeThreadMin);
 
 	MessageListener* getMessageListener();
+	//Note by lin.qiongshan, Consumer 对象析构不会删除设置进去的 MessageListener 指针，因此需要外部维护该指针对象的生命周期
 	void setMessageListener(MessageListener* pMessageListener);
 
 	MessageModel getMessageModel();
@@ -93,12 +97,22 @@ public:
 
 	std::map<std::string, std::string>& getSubscription();
 	void setSubscription(const std::map<std::string, std::string>& subscription);
+	
+	/** modify by liang.haibo 2016-10-09 
+	** consumeTimestamp getter and setter
+	**/
+    std::string getConsumeTimestamp();
+	void setConsumeTimestamp(const std::string& consumeTimestamp);
 
 	//MQConsumer
 	void sendMessageBack(MessageExt& msg, int delayLevel);
 	std::set<MessageQueue>* fetchSubscribeMessageQueues(const std::string& topic);
 
 	void start();
+	//Note by lin.qiongshan, shutdown 后不能重新 start，start 只允许在类首次实例化后调用。
+	//	Consumer 对象析构不会自动 shutdown，而 shutdown 包含一些重要操作，因此终止一个客户端实例时，一定要调用 shutdown
+	//	shutdown 会同时尝试关闭其关联的 MQClientFactory 实例，该实例管理 clientId 相同的客户端实例
+	//	因为 MQClientFactory 在 shutdown 时，只会在所有的客户端实例都已退出，才会真正关闭，所以某个客户端实例的 shutdown，不会影响其它实例（如 ConsumerGroup 不同，clientId 相同的另一个 client）
 	void shutdown();
 	//MQConsumer end
 	
@@ -119,6 +133,9 @@ public:
 
 	DefaultMQPushConsumerImpl* getDefaultMQPushConsumerImpl();
 
+	//add by lin.qiongshan, 2016-9-2，TCP 操作超时配置化
+	void setTcpTimeoutMilliseconds(int milliseconds);
+	int getTcpTimeoutMilliseconds();
 protected:
 	DefaultMQPushConsumerImpl* m_pDefaultMQPushConsumerImpl;
 
@@ -192,6 +209,14 @@ private:
 	* 拉消息，一次拉多少条
 	*/
 	int m_pullBatchSize;
+	
+    /**
+     * Consumer第一次启动时，如果回溯消费，默认回溯到哪个时间点，数据格式如下，时间精度秒：<br>
+     * 20131223171201<br>
+     * 表示2013年12月23日17点12分01秒<br>
+     * 默认回溯到相对启动时间的半小时前
+     */
+	std::string m_consumeTimestamp;
 };
 
 #endif

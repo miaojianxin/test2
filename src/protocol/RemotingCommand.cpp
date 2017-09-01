@@ -21,10 +21,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <json/json.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "SocketUtil.h"
 #include "CommandCustomHeader.h"
 #include "MQVersion.h"
+#include "UtilAll.h"
+#include "MQProtos.h"
 
 
 AtomicInteger RemotingCommand::s_seqNumber = 0;
@@ -33,7 +37,7 @@ volatile int RemotingCommand::s_configVersion=MQVersion::s_CurrentVersion;
 RemotingCommand::RemotingCommand(int code)
 	:m_code(code),m_language("CPP"),m_version(0),m_opaque(s_seqNumber++),
 	 m_flag(0),m_remark(""),m_pCustomHeader(NULL),m_headLen(0),m_pHead(NULL),
-	 m_bodyLen(0),m_pBody(NULL)
+	 m_bodyLen(0),m_pBody(NULL),m_releaseBody(false)
 {
 }
 
@@ -54,6 +58,7 @@ RemotingCommand::RemotingCommand( int code,
 RemotingCommand::~RemotingCommand()
 {
 	delete[] m_pHead;
+    m_pHead = NULL;
 
 	if (m_releaseBody)
 	{
@@ -61,17 +66,20 @@ RemotingCommand::~RemotingCommand()
 		m_bodyLen=0;
 		m_pBody = NULL;
 	}
-
-	delete m_pCustomHeader;
+    /* modified by yu.guangjie at 2015-08-14, reason: */
+    if(m_pCustomHeader != NULL)
+    {
+        delete m_pCustomHeader;
+        m_pCustomHeader = NULL;
+    }
 }
 
 void RemotingCommand::Encode()
 {
-	std::string extHeader="{}";
-	if (m_pCustomHeader)
-	{
-		m_pCustomHeader->Encode(extHeader);
-	}
+	std::string extHeader = "{}";
+    //modify by yugj
+    if(m_pCustomHeader != NULL)
+	    m_pCustomHeader->Encode(extHeader);
 
 	std::stringstream ss;
 	ss<<"{"<<CODE_STRING<<m_code<<","
@@ -96,6 +104,17 @@ void RemotingCommand::Encode()
 	memcpy(m_pHead+4,&tmp,4);
 
 	memcpy(m_pHead+8,ss.str().c_str(),headLen);
+
+#if 0
+    if(m_code == PULL_MESSAGE_VALUE)
+    {
+        MqLogNotice("Encode packet head: %s", ss.str().c_str());
+    }
+    else
+#endif
+    {
+        MqLogVerb("Encode packet head: %s", ss.str().c_str());
+    }    
 }
 
 const char* RemotingCommand::GetHead()
@@ -141,12 +160,12 @@ void RemotingCommand::SetBody(char* pData,int len,bool copy)
 	}
 }
 
+ 
 RemotingCommand* RemotingCommand::Decode(char* pData,int len)
 {
 	//½âÎöheader
-
-	Json::Reader reader;
-	Json::Value object;
+	MQJson::Reader reader;
+	MQJson::Value object;
 	if (!reader.parse(pData+8, object))
 	{
 		return NULL;
@@ -158,7 +177,7 @@ RemotingCommand* RemotingCommand::Decode(char* pData,int len)
 	int opaque =object["opaque"].asInt();
 	int flag = object["flag"].asInt();
 
-	Json::Value v = object["remark"];
+	MQJson::Value v = object["remark"];
 	std::string remark="";
 	if (!v.isNull())
 	{
@@ -183,6 +202,7 @@ RemotingCommand* RemotingCommand::Decode(char* pData,int len)
 	{
 		cmd->SetBody(pData+8 + headLen,bodyLen,true);
 	}
+    MqLogVerb("Decode packet: %s", pData+8);
 
 	return cmd;
 }
@@ -195,7 +215,7 @@ RemotingCommand* RemotingCommand::CreateRemotingCommand(const char* pData,int le
 }
 
 RemotingCommand* RemotingCommand::createRequestCommand( int code, CommandCustomHeader* pCustomHeader )
-{
+{  
 	RemotingCommand* cmd = new RemotingCommand(code);
 	cmd->setCommandCustomHeader(pCustomHeader);
 	setCmdVersion(cmd);

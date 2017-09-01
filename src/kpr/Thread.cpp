@@ -88,6 +88,9 @@ namespace kpr
 		catch(...)
 		{
 		}
+#ifndef WIN32
+        pthread_detach(pthread_self());
+#endif
 	}
 
 	void Thread::SetName(const char* name)
@@ -117,10 +120,6 @@ namespace kpr
 	const char* Thread::GetName() const
 	{
 		ScopedLock<Mutex> guard(m_mutex);
-		return m_name;
-	}
-
-	const char* Thread::GetNameWithLockHeld() const {
 		return m_name;
 	}
 
@@ -164,14 +163,11 @@ namespace kpr
 		pthread_attr_destroy(&attr);
 #endif
 		m_started = true;
-
-		std::string service_name(GetNameWithLockHeld());
-		Logger::get_logger()->info("{} start successfully", service_name);
 	}
 
 	void Thread::Run()
 	{
-		//TODO support runable
+		// support runable
 	}
 
 	bool Thread::IsAlive() const

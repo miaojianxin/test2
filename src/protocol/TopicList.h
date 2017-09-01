@@ -24,7 +24,29 @@ class TopicList : public RemotingSerializable
 public:
 	static TopicList* Decode(char* pData,int len)
 	{
-		return new TopicList();
+        /* modified by yu.guangjie at 2015-08-14, reason: parse*/
+
+		//topicList:
+		//    [
+		//        topic1,
+		//        ...
+		//        topicN
+		//    ]
+		MQJson::Reader reader;
+		MQJson::Value object;
+		if (!reader.parse(pData, object))
+		{
+			return NULL;
+		}
+
+		TopicList *tlist =  new TopicList();
+        MQJson::Value tps = object["topicList"];
+        for (size_t i = 0;i < tps.size();i++)
+        {
+            tlist->getTopicList().insert(tps[i].asString());
+        }
+
+        return tlist;
 	}
 
 	void Encode(std::string& outData)
@@ -32,7 +54,7 @@ public:
 
 	}
 
-	const std::set<std::string>& getTopicList()
+	std::set<std::string>& getTopicList()
 	{
 		return m_topicList;
 	}

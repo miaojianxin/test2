@@ -23,6 +23,7 @@
 #include <string>
 
 #include "MixAll.h"
+#include "UtilAll.h"
 #include "json/json.h"
 
 struct QueueData
@@ -49,6 +50,18 @@ struct QueueData
 		
 		return false;
 	}
+    QueueData& operator=(const QueueData& other)
+    {
+        if(this != &other)
+        {
+            brokerName = other.brokerName;
+    	    readQueueNums = other.readQueueNums;
+    	    writeQueueNums = other.writeQueueNums;
+            perm = other.perm;
+        }
+        return *this;
+    }
+    
 };
 
 struct BrokerData
@@ -71,6 +84,15 @@ struct BrokerData
 
 		return false;
 	}
+    BrokerData& operator=(const BrokerData& other)
+    {
+        if(this != &other)
+        {
+            brokerName = other.brokerName;
+    	    brokerAddrs = other.brokerAddrs;
+        }
+        return *this;
+    }
 };
 
 /**
@@ -80,6 +102,16 @@ struct BrokerData
 class TopicRouteData
 {
 public:
+    TopicRouteData& operator=(const TopicRouteData& other)
+    {
+        if(this != &other)
+        {
+            m_orderTopicConf = other.m_orderTopicConf;
+    	    m_queueDatas = other.m_queueDatas;
+    	    m_brokerDatas = other.m_brokerDatas;
+        }
+        return *this;
+    }
 	void Encode(std::string& outData)
 	{
 
@@ -101,21 +133,22 @@ public:
 		//
 		//
 
-		Json::Reader reader;
-		Json::Value object;
+		MQJson::Reader reader;
+		MQJson::Value object;
 		if (!reader.parse(pData, object))
 		{
+		    MqLogWarn("Json parse failed!!:\n%s", pData);
 			return NULL;
 		}
 
 		TopicRouteData * trd = new TopicRouteData();
 		trd->setOrderTopicConf(object["orderTopicConf"].asString());
 
-		Json::Value qds = object["queueDatas"];
+		MQJson::Value qds = object["queueDatas"];
 		for (size_t i=0;i<qds.size();i++)
 		{
 			QueueData d;
-			Json::Value qd = qds[i];
+			MQJson::Value qd = qds[i];
 			d.brokerName = qd["brokerName"].asString();
 			d.readQueueNums = qd["readQueueNums"].asInt();
 			d.writeQueueNums = qd["writeQueueNums"].asInt();
@@ -124,15 +157,15 @@ public:
 			trd->getQueueDatas().push_back(d);
 		}
 
-		Json::Value bds = object["brokerDatas"];
+		MQJson::Value bds = object["brokerDatas"];
 		for (size_t i=0;i<bds.size();i++)
 		{
 			BrokerData d;
-			Json::Value bd = bds[i];
+			MQJson::Value bd = bds[i];
 			d.brokerName = bd["brokerName"].asString();
 
-			Json::Value bas=bd["brokerAddrs"];
-			Json::Value::Members mbs = bas.getMemberNames();
+			MQJson::Value bas=bd["brokerAddrs"];
+			MQJson::Value::Members mbs = bas.getMemberNames();
 			for (size_t i=0;i<mbs.size();i++)
 			{
 				std::string key = mbs.at(i);

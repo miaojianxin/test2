@@ -18,6 +18,7 @@
 
 #include <string>
 #include <set>
+#include <sstream>
 
 #include "ConsumeType.h"
 #include "SubscriptionData.h"
@@ -50,18 +51,161 @@ typedef struct  ProducerData
 class HeartbeatData : public RemotingSerializable
 {
 public:
-	HeartbeatData();
-	~HeartbeatData();
-	void Encode(std::string& outData);
+	void Encode(std::string& outData)
+	{
+		std::stringstream ss;
 
-	std::string getClientID();
-	void setClientID(const std::string& clientID);
+    	ss<<"{"<<"\"clientID\":"<<"\""<<m_clientID<<"\"";
+        if(!m_producerDataSet.empty())
+        {
+            ss<<",\"producerDataSet\":"<<"[";
+            std::set<ProducerData>::iterator it = m_producerDataSet.begin();
+    		for (;it != m_producerDataSet.end();it++)
+    		{
+    		    if(it == m_producerDataSet.begin())
+                {
+                    ss<<"{\"groupName\":\""<<it->groupName<<"\"}";
+                }
+                else
+                {
+                    ss<<",{\"groupName\":\""<<it->groupName<<"\"}";
+                }
+    		}
+            ss<<"]";
+        }
 
-	std::set<ProducerData>& getProducerDataSet();
-	void setProducerDataSet(const std::set<ProducerData>& producerDataSet);
+        if(!m_consumerDataSet.empty())
+        {
+            std::string consumeWhere;
+            std::string consumeType;
+            std::string messModel;
+            ss<<",\"consumerDataSet\":"<<"[";
+            std::set<ConsumerData>::iterator it = m_consumerDataSet.begin();
+    		for (;it != m_consumerDataSet.end();it++)
+    		{
+                if(CONSUME_FROM_FIRST_OFFSET == it->consumeFromWhere)
+                {
+                    consumeWhere = "CONSUME_FROM_FIRST_OFFSET";
+                }
+                else if(CONSUME_FROM_LAST_OFFSET == it->consumeFromWhere)
+                {
+                    consumeWhere = "CONSUME_FROM_LAST_OFFSET";
+                }
+                else if(CONSUME_FROM_TIMESTAMP == it->consumeFromWhere)
+                {
+                    consumeWhere = "CONSUME_FROM_TIMESTAMP";
+                }
+                else
+                {
+                    consumeWhere = "UNKOWN";
+                }
 
-	std::set<ConsumerData>& getConsumerDataSet();
-	void setConsumerDataSet(const std::set<ConsumerData>& consumerDataSet);
+                if(CONSUME_PASSIVELY == it->consumeType)
+                {
+                    consumeType = "CONSUME_PASSIVELY";
+                }
+                else if(CONSUME_ACTIVELY == it->consumeType)
+                {
+                    consumeType = "CONSUME_ACTIVELY";
+                }
+                else
+                {
+                    consumeType = "UNKOWN";
+                }
+
+                if(CLUSTERING == it->messageModel)
+                {
+                    messModel = "CLUSTERING";
+                }
+                else if(BROADCASTING == it->messageModel)
+                {
+                    messModel = "BROADCASTING";
+                }
+                else
+                {
+                    messModel = "UNKOWN";
+                }
+
+                if(it != m_consumerDataSet.begin())
+                {
+                    ss<<",";
+                }
+                ss<<"{\"consumeFromWhere\":\""<<consumeWhere<<"\","
+                    <<"\"consumeType\":\""<<consumeType<<"\","
+                    <<"\"groupName\":\""<<it->groupName<<"\","                    
+                    <<"\"messageModel\":\""<<messModel<<"\","
+                    <<"\"subscriptionDataSet\":[";
+                std::set<SubscriptionData>::iterator itSub = it->subscriptionDataSet.begin();
+    		    for (;itSub != it->subscriptionDataSet.end();itSub++)
+                {
+                    if(itSub != it->subscriptionDataSet.begin())
+                    {
+                        ss<<",";
+                    }
+                    ss<<"{\"classFilterMode\":false,"
+                        <<"\"codeSet\":[";
+                    std::set<int>::const_iterator itCode = itSub->getCodeSet().begin();
+                    for (;itCode != itSub->getCodeSet().end();itCode++)
+                    {
+                        if(itCode != itSub->getCodeSet().begin())
+                        {
+                            ss<<",";
+                        }
+                        ss<<*itCode;
+                    }
+                    ss<<"],\"subString\":\""<<itSub->getSubString()<<"\","
+                        <<"\"subVersion\":"<<itSub->getSubVersion()<<","
+                        <<"\"tagsSet\":[";
+                    
+                    std::set<std::string>::const_iterator itTag = itSub->getTagsSet().begin();
+                    for (;itTag != itSub->getTagsSet().end();itTag++)
+                    {
+                        if(itTag != itSub->getTagsSet().begin())
+                        {
+                            ss<<",";
+                        }
+                        ss<<"\""<<*itTag<<"\"";
+                    }
+                    ss<<"],\"topic\":\""<<itSub->getTopic()<<"\"}";                    
+                }
+                ss<<"],\"unitMode\":false}";                
+    		}
+            ss<<"]";
+        }
+        ss<<"}";
+
+    	outData = ss.str();
+	}
+
+	std::string getClientID()
+	{
+		return m_clientID;
+	}
+
+	void setClientID(const std::string& clientID)
+	{
+		m_clientID = clientID;
+	}
+
+	std::set<ProducerData>& getProducerDataSet()
+	{
+		return m_producerDataSet;
+	}
+
+	void setProducerDataSet(const std::set<ProducerData>& producerDataSet)
+	{
+		m_producerDataSet = producerDataSet;
+	}
+
+	std::set<ConsumerData>& getConsumerDataSet()
+	{
+		return m_consumerDataSet;
+	}
+
+	void setConsumerDataSet(const std::set<ConsumerData>& consumerDataSet)
+	{
+		m_consumerDataSet = consumerDataSet;
+	}
 
 private:
 	std::string m_clientID;

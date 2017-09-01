@@ -32,6 +32,43 @@
 class TopicPublishInfo
 {
 public:
+	//add by lin.qiongshan. 增加复制构造函数，重载赋值操作符，增加析构函数：目的都是为了妥善处理成员 m_messageQueueList 内保存的 MessageQueue 指针
+	TopicPublishInfo(const TopicPublishInfo& another) :
+		m_orderTopic(another.m_orderTopic),
+		m_sendWhichQueue(another.m_sendWhichQueue)
+	{
+		m_messageQueueList.clear();
+		for (std::vector<MessageQueue*>::const_iterator itor = another.m_messageQueueList.begin();
+			itor != another.m_messageQueueList.end();
+			++itor)
+		{
+			MessageQueue* mq = new MessageQueue(**itor);
+			m_messageQueueList.push_back(mq);
+		}
+	}
+
+	TopicPublishInfo& operator=(const TopicPublishInfo& another)
+	{
+		m_orderTopic = another.m_orderTopic;
+		m_sendWhichQueue = another.m_sendWhichQueue;
+		m_messageQueueList.clear();
+		for (std::vector<MessageQueue*>::const_iterator itor = another.m_messageQueueList.begin();
+			itor != another.m_messageQueueList.end();
+			++itor)
+		{
+			MessageQueue* mq = new MessageQueue(**itor);
+			m_messageQueueList.push_back(mq);
+		}
+	}
+
+	~TopicPublishInfo()
+	{
+		clearMessageQueue();
+	}
+
+
+
+
 	TopicPublishInfo()
 	{
 		m_orderTopic = false;
@@ -57,6 +94,7 @@ public:
 		return m_messageQueueList;
 	}
 
+	//该函数有问题，不过没有被调用，不修改,浅copy问题
 	void setMessageQueueList(const std::vector<MessageQueue*>& messageQueueList)
 	{
 		m_messageQueueList = messageQueueList;
@@ -86,6 +124,7 @@ public:
 				MessageQueue* mq = m_messageQueueList.at(pos);
 				if (mq->getBrokerName()!=lastBrokerName)
 				{
+				    //MessageQueue *mq_new = new MessageQueue(mq->getTopic(),mq->getBrokerName(),mq->getQueueId());
 					return mq;
 				}
 			}
@@ -94,12 +133,29 @@ public:
 		}
 		else
 		{
+		    if (m_messageQueueList.size() <= 0)
+            {
+                return NULL;
+            }
 			int index = m_sendWhichQueue++;
 			int pos = abs(index) % m_messageQueueList.size();
-			return m_messageQueueList.at(pos);
+			MessageQueue* mq = m_messageQueueList.at(pos);
+            //MessageQueue *mq_new = new MessageQueue(mq->getTopic(),mq->getBrokerName(),mq->getQueueId());
+		    return mq;
 		}
 	}
+    
 
+    void clearMessageQueue()
+    {
+        for (size_t i = 0; i < m_messageQueueList.size(); i++)
+		{
+			MessageQueue* mq = m_messageQueueList.at(i);
+            /* modified by yu.guangjie at 2015-11-24, reason: */
+			delete mq;
+		}
+        m_messageQueueList.clear();
+    }
 private:
 	bool m_orderTopic;
 	std::vector<MessageQueue*> m_messageQueueList;

@@ -24,6 +24,7 @@
 #include "PullResult.h"
 #include "MessageQueue.h"
 #include "CommunicationMode.h"
+#include "Mutex.h"
 
 class MQClientFactory;
 class PullCallback;
@@ -72,6 +73,7 @@ public:
 
 private:
 	std::map<MessageQueue, AtomicLong> m_pullFromWhichNodeTable;
+    kpr::Mutex m_whichMutex;
 	MQClientFactory* m_pMQClientFactory;
 	std::string m_consumerGroup;
 };

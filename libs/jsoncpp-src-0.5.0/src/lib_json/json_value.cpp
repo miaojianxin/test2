@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <iostream>
 #include <json/value.h>
 #include <json/writer.h>
@@ -14,10 +15,12 @@
 #endif // #ifndef JSON_USE_SIMPLE_INTERNAL_ALLOCATOR
 
 #define JSON_ASSERT_UNREACHABLE assert( false )
-#define JSON_ASSERT( condition ) assert( condition );  // @todo <= change this into an exception throw
-#define JSON_ASSERT_MESSAGE( condition, message ) if (!( condition )) throw std::runtime_error( message );
+/* modified by yu.guangjie at 2015-08-29, reason: */
+#define JSON_ASSERT( condition ) do{if (!( condition )){printf("!!!JSON_ASSERT!!!!!!!!!\n");} assert( condition );}while(0);  // @todo <= change this into an exception throw
+#define JSON_ASSERT_MESSAGE( condition, message ) if (!( condition )){ printf("!!!JSON_ASSERT_MESSAGE!!![%s]\n", message);throw std::runtime_error( message );}
 
-namespace Json {
+/* modified by yu.guangjie at 2015-10-14, reason: change Json to MQJson*/
+namespace MQJson {
 
 const Value Value::null;
 const Int Value::minInt = Int( ~(UInt(-1)/2) );

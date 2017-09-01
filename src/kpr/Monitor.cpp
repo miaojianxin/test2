@@ -122,4 +122,77 @@ namespace kpr
 	{
 		assert(id == ThreadId::GetCurrentThreadId());
 	}
+
+
+    ToMutex::ToMutex(): m_bIsLock(false),m_iCounts(0)
+	{
+	}
+
+	ToMutex::~ToMutex()
+	{
+	}
+
+    bool ToMutex::Lock(long msec)
+    {
+        int iRet = 0;
+        bool bSuccess = false;
+        if(m_mutex.Lock() == 0)
+        {
+            return false;
+        }        
+        
+        ThreadId Tid = ThreadId::GetCurrentThreadId();
+        while(m_bIsLock)    
+        {
+            if(Tid == m_TID)
+            {
+                ++m_iCounts;
+                break;
+            }
+
+            bSuccess = m_condition.Wait(m_mutex, msec);
+            if(!bSuccess)
+            {                    
+                if(m_bIsLock)
+                {
+                    m_mutex.Unlock();
+                    return false;
+                }
+                else 
+                {
+                    m_bIsLock = true;
+                    m_iCounts = 1;
+                    m_TID = Tid;
+                    m_mutex.Unlock();
+                    return true;
+                }
+            }
+        }
+
+        if(!m_bIsLock)
+        {
+            m_bIsLock = true;
+            m_iCounts = 1;
+            m_TID = Tid;
+        }
+        
+        m_mutex.Unlock();
+        
+        return true;
+    }
+	void ToMutex::Unlock()
+    {
+        m_mutex.Lock();
+        --m_iCounts;
+        if(m_iCounts <= 0)
+        {
+            m_bIsLock = false;
+        }
+        m_mutex.Unlock();
+        if(m_bIsLock == false) 
+        {
+            m_condition.Notify();
+        }        
+    }
+    
 }

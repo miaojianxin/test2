@@ -14,8 +14,8 @@
 * limitations under the License.
 */
 
-#if!defined __MESSAGE_H__
-#define __MESSAGE_H__
+#if!defined __ZMQ_MESSAGE_H__
+#define __ZMQ_MESSAGE_H__
 
 #include <map>
 #include <string>
