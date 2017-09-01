@@ -19,9 +19,9 @@
 
 #include <string>
 #include <list>
-#include "json/json.h"
 
 #include "RemotingSerializable.h"
+#include "UtilAll.h"
 
 class GetConsumerListByGroupResponseBody : public RemotingSerializable
 {
@@ -43,30 +43,23 @@ public:
 
 	static GetConsumerListByGroupResponseBody* Decode(char* pData,int len)
 	{
-		//"consumerIdList":["192.168.1.120@DEFAULT"]
 		GetConsumerListByGroupResponseBody* ret =  new GetConsumerListByGroupResponseBody();
-		Json::Reader reader;
-		Json::Value object;
-		if (!reader.parse(pData, object))
+
+    	MQJson::Reader reader;
+    	MQJson::Value object;
+    	if (!reader.parse(pData, object))
+    	{
+    		return NULL;
+    	}
+
+    	MQJson::Value cons = object["consumerIdList"];
+		int count = cons.size();
+		for(int i = 0; i < count; i++)
 		{
-			return NULL;
+			MQJson::Value consumer = cons[i];
+            ret->getConsumerIdList().push_back(consumer.asString());
 		}
-
-		std::list<std::string> consumers;
-
-		Json::Value ext = object["consumerIdList"];
-
-		for (int i=0;i< ext.size();i++)
-		{
-			Json::Value v = ext[i];
-			if (v!=Json::Value::null)
-			{
-				consumers.push_back(v.asString());
-			}
-		}
-		
-		ret->setConsumerIdList(consumers);
-
+        
 		return ret;
 	}
 

@@ -17,11 +17,12 @@
 #if!defined __PRODUCERINVOKECALLBACK_H__
 #define __PRODUCERINVOKECALLBACK_H__
 
-#include "InvokeCallback.h"
 #include <string>
-class MQClientAPIImpl;
+#include "InvokeCallback.h"
 
+class Message;
 class SendCallback;
+class MQClientAPIImpl;
 
 /**
 * 异步调用应答回调接口
@@ -30,18 +31,18 @@ class SendCallback;
 class ProducerInvokeCallback : public InvokeCallback
 {
 public:
-	ProducerInvokeCallback(SendCallback* pSendCallBack,
-						MQClientAPIImpl* pMQClientAPIImpl,
-						const std::string& topic,
-						const std::string& brokerName);
+	ProducerInvokeCallback(const std::string& brokerName, 
+						   Message& msg, 
+						   SendCallback* pSendCallBack, 
+						   MQClientAPIImpl* pClientAPIImpl);
 	virtual ~ProducerInvokeCallback();
 	virtual void operationComplete(ResponseFuture* pResponseFuture);
 
 private:
 	SendCallback* m_pSendCallBack;
 	MQClientAPIImpl* m_pMQClientAPIImpl;
-	std::string m_topic;
-	std::string m_brokerName;
+	Message* m_pMsg;
+	std::string m_pBrokerName;
 };
 
 #endif

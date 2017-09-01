@@ -16,7 +16,8 @@
 
 /** \brief JSON (JavaScript Object Notation).
  */
-namespace Json {
+/* modified by yu.guangjie at 2015-10-14, reason: change Json to MQJson*/
+namespace MQJson {
 
    /** \brief Type of the value held by a Value object.
     */
@@ -119,8 +120,8 @@ namespace Json {
       typedef std::vector<std::string> Members;
       typedef ValueIterator iterator;
       typedef ValueConstIterator const_iterator;
-      typedef Json::UInt UInt;
-      typedef Json::Int Int;
+      typedef MQJson::UInt UInt;
+      typedef MQJson::Int Int;
       typedef UInt ArrayIndex;
 
       static const Value null;

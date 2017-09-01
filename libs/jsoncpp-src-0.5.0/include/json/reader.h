@@ -8,7 +8,8 @@
 # include <string>
 # include <iostream>
 
-namespace Json {
+/* modified by yu.guangjie at 2015-10-14, reason: change Json to MQJson*/
+namespace MQJson {
 
    /** \brief Unserialize a <a HREF="http://www.json.org">JSON</a> document into a Value.
     *

@@ -22,6 +22,8 @@
 #include "MQClientAPIImpl.h"
 #include "KPRUtil.h"
 #include "ScopedLock.h"
+#include "UtilAll.h"
+#include "MQClientException.h"
 
 RebalanceImpl::RebalanceImpl(const std::string& consumerGroup, 
 	MessageModel messageModel,
@@ -57,8 +59,12 @@ void RebalanceImpl::unlock(MessageQueue& mq, bool oneway)
 		}
 		catch (...)
 		{
-			//TODO log.error("unlockBatchMQ exception, " + mq, e);
+			// log.error("unlockBatchMQ exception, " + mq, e);
 		}
+
+        //add by lin.qs@2017-4-6，要删除 new 的指针对象
+        delete requestBody;
+        requestBody = NULL;
 	}
 }
 
@@ -91,8 +97,6 @@ void RebalanceImpl::unlockAll(bool oneway)
 			{
 				m_pMQClientFactory->getMQClientAPIImpl()->unlockBatchMQ(findBrokerResult.brokerAddr,
 					requestBody, 1000, oneway);
-
-				kpr::ScopedLock<kpr::Mutex> lock(m_processQueueTableLock);
 				std::set<MessageQueue>::iterator itm = mqs.begin();
 				for (;itm!=mqs.end();itm++)
 				{
@@ -108,6 +112,10 @@ void RebalanceImpl::unlockAll(bool oneway)
 			{
 				//TODO log.error("unlockBatchMQ exception, " + mqs, e);
 			}
+
+            //add by lin.qs@2017-4-6，要删除 new 的指针对象
+            delete requestBody;
+            requestBody = NULL;
 		}
 	}
 }
@@ -118,21 +126,28 @@ bool RebalanceImpl::lock(MessageQueue& mq)
 		m_pMQClientFactory->findBrokerAddressInSubscribe(mq.getBrokerName(), MixAll::MASTER_ID, true);
 	if (!findBrokerResult.brokerAddr.empty())
 	{
+        //mdy by lin.qs@2017-4-6，指针未删除，内存泄漏；修改为局部变量的形式
+#if 0
 		LockBatchRequestBody* requestBody = new LockBatchRequestBody();
 		requestBody->setConsumerGroup(m_consumerGroup);
 		requestBody->setClientId(m_pMQClientFactory->getClientId());
 		requestBody->getMqSet().insert(mq);
+#else
+        LockBatchRequestBody requestBody;
+        requestBody.setConsumerGroup(m_consumerGroup);
+        requestBody.setClientId(m_pMQClientFactory->getClientId());
+        requestBody.getMqSet().insert(mq);
+#endif
 
 		try
 		{
 			std::set<MessageQueue> lockedMq =
 				m_pMQClientFactory->getMQClientAPIImpl()->lockBatchMQ(
-				findBrokerResult.brokerAddr, requestBody, 1000);
+				findBrokerResult.brokerAddr, &requestBody, 1000);
 
 			std::set<MessageQueue>::iterator it = lockedMq.begin();
 			for (; it != lockedMq.end(); it++)
 			{
-				kpr::ScopedLock<kpr::Mutex> lock(m_processQueueTableLock);
 				MessageQueue mmqq = *it;
 				std::map<MessageQueue, ProcessQueue*>::iterator itt = m_processQueueTable.find(mmqq);
 				if (itt != m_processQueueTable.end())
@@ -197,7 +212,6 @@ void RebalanceImpl::lockAll()
 				std::set<MessageQueue>::iterator its = lockOKMQSet.begin();
 				for (;its != lockOKMQSet.end();its++)
 				{
-					kpr::ScopedLock<kpr::Mutex> lock(m_processQueueTableLock);
 					MessageQueue mq = *its;
 					std::map<MessageQueue, ProcessQueue*>::iterator itt = m_processQueueTable.find(mq);
 					if (itt != m_processQueueTable.end())
@@ -221,7 +235,6 @@ void RebalanceImpl::lockAll()
 					std::set<MessageQueue>::iterator itf = lockOKMQSet.find(mq);
 					if (itf == lockOKMQSet.end())
 					{
-						kpr::ScopedLock<kpr::Mutex> lock(m_processQueueTableLock);
 						std::map<MessageQueue, ProcessQueue*>::iterator itt = m_processQueueTable.find(mq);
 						if (itt != m_processQueueTable.end())
 						{
@@ -232,10 +245,17 @@ void RebalanceImpl::lockAll()
 					}
 				}
 			}
+            /* modified by yu.guangjie at 2015-11-04, reason: add exception log*/
+            catch (MQClientException& e)
+            {
+                MqLogWarn("MQClientException:: %s!", e.what());  
+            }
 			catch (...)
 			{
-				//TODO log.error("lockBatchMQ exception, " + mqs, e);
+				MqLogWarn("RebalanceImpl::lockAll unkown exception!");  
 			}
+            delete requestBody;
+            requestBody = NULL;
 		}
 	}
 }
@@ -244,6 +264,10 @@ void RebalanceImpl::doRebalance()
 {
 	std::map<std::string, SubscriptionData> subTable = getSubscriptionInner();
 	std::map<std::string, SubscriptionData>::iterator it = subTable.begin();
+
+	//mjx modify add
+	m_downBrokerName.clear();
+	
 	for (; it != subTable.end(); it++)
 	{
 		std::string topic = it->first;
@@ -255,18 +279,57 @@ void RebalanceImpl::doRebalance()
 		{
 			if (topic.find(MixAll::RETRY_GROUP_TOPIC_PREFIX) != 0)
 			{
-				//TODO log.warn("rebalanceByTopic Exception", e);
+				MqLogWarn("rebalanceByTopic(%s) Exception", topic.c_str());
 			}
 		}
 	}
 
-
 	truncateMessageQueueNotMyTopic();
 }
 
-std::map<std::string, SubscriptionData>& RebalanceImpl::getSubscriptionInner()
+std::map<std::string, SubscriptionData> RebalanceImpl::getSubscriptionInner()
 {
-	return m_subscriptionInner;
+    /* modified by yu.guangjie at 2015-10-13, reason: */
+    std::map<std::string, SubscriptionData> mapSubData;
+    {
+        kpr::ScopedLock<kpr::Mutex> lock(m_subsMutex);
+        mapSubData = m_subscriptionInner;
+    }    
+	return mapSubData;
+}
+
+void RebalanceImpl::subscribe(std::string topic, SubscriptionData& subData)
+{
+    kpr::ScopedLock<kpr::Mutex> lock(m_subsMutex);
+    m_subscriptionInner[topic] = subData;
+}
+
+void RebalanceImpl::unsubscribe(std::string topic)
+{
+    kpr::ScopedLock<kpr::Mutex> lock(m_subsMutex);
+    m_subscriptionInner.erase(topic);
+}
+
+bool RebalanceImpl::hasSubscribe(std::string topic, SubscriptionData *psubData)
+{
+    bool bHasFlag = true;
+    
+    kpr::ScopedLock<kpr::Mutex> lock(m_subsMutex);
+    std::map<std::string, SubscriptionData>::iterator it = m_subscriptionInner.find(topic);
+    if(it != m_subscriptionInner.end())
+    {
+        bHasFlag = true;
+        if(psubData != NULL)
+        {
+            *psubData = it->second;
+        }
+    }
+    else
+    {
+        bHasFlag = false;
+    }	
+
+    return bHasFlag;
 }
 
 std::map<MessageQueue, ProcessQueue*>& RebalanceImpl::getProcessQueueTable()
@@ -321,11 +384,11 @@ void RebalanceImpl::setmQClientFactory(MQClientFactory* pMQClientFactory)
 
 std::map<std::string, std::set<MessageQueue> > RebalanceImpl::buildProcessQueueTableByBrokerName()
 {
-	kpr::ScopedLock<kpr::Mutex> lock(m_processQueueTableLock);
 	std::map<std::string, std::set<MessageQueue> > result ;
 	std::map<MessageQueue, ProcessQueue*>::iterator it = m_processQueueTable.begin();
 
-	for ( ; it != m_processQueueTable.end();)
+    /* modified by yu.guangjie at 2015-08-27, reason: add ++it */
+	for ( ; it != m_processQueueTable.end(); ++it)
 	{
 		MessageQueue mq = it->first;
 		std::map<std::string, std::set<MessageQueue> >::iterator itm = result.find(mq.getBrokerName());
@@ -346,6 +409,14 @@ std::map<std::string, std::set<MessageQueue> > RebalanceImpl::buildProcessQueueT
 
 void RebalanceImpl::rebalanceByTopic(const std::string& topic)
 {
+    MqLogDebug("rebalanceByTopic:: start to doRebalance consumerGroup[%s], topic[%s].", 
+        m_consumerGroup.c_str(), topic.c_str());
+
+	//mjx modify add
+	std::string brokerName = "";
+	std:: string brokerAddr = "";
+	//static bool bFind = true;
+	
 	switch (m_messageModel)
 	{
 	case BROADCASTING:
@@ -378,9 +449,10 @@ void RebalanceImpl::rebalanceByTopic(const std::string& topic)
 
 			if (it == m_topicSubscribeInfoTable.end())
 			{
-				if (topic.find(MixAll::RETRY_GROUP_TOPIC_PREFIX) !=0 )
+				if (topic.find(MixAll::RETRY_GROUP_TOPIC_PREFIX) != 0 )
 				{
-					Logger::get_logger()->warn("doRebalance, {}, but the topic[{}] not exist.", m_consumerGroup, topic);
+					MqLogWarn("doRebalance consumerGroup[%s], but the topic[%s] not exist.", 
+                        m_consumerGroup.c_str(), topic.c_str());
 				}
 			}
 
@@ -388,15 +460,23 @@ void RebalanceImpl::rebalanceByTopic(const std::string& topic)
 
 			if (cidAll.empty())
 			{
-				Logger::get_logger()->warn("doRebalance, {} {}, get consumer id list failed", m_consumerGroup, topic);
+				MqLogWarn("doRebalance[consumerGroup=%s, topic=%s]: get consumer id list failed!", 
+                    m_consumerGroup.c_str(), topic.c_str());
+				
+				
 			}
 
 			if (it != m_topicSubscribeInfoTable.end() && !cidAll.empty())
 			{
+
+				
 				std::vector<MessageQueue> mqAll;
 				std::set<MessageQueue> mqSet = it->second;
 				std::set<MessageQueue>::iterator its = mqSet.begin();
 
+				
+
+				
 				//set 本身已经排序
 				for (; its != mqSet.end();its++)
 				{
@@ -412,19 +492,21 @@ void RebalanceImpl::rebalanceByTopic(const std::string& topic)
 				std::vector<MessageQueue>* allocateResult;
 				try
 				{
+					
 					allocateResult = strategy->allocate(m_pMQClientFactory->getClientId(), mqAll, cidAll);
 				}
-				catch (...)
+				catch (MQException& e)
 				{
-					//TODO log.error("AllocateMessageQueueStrategy.allocate Exception", e);
+					MqLogError("AllocateMessageQueueStrategy.allocate Exception:%s", e.what());
 				}
 
 				std::set<MessageQueue> allocateResultSet;
 				if (allocateResult != NULL)
 				{
+
 					for(size_t i=0;i<allocateResult->size();i++)
 					{
-						allocateResultSet.insert(allocateResult->at(i));
+						allocateResultSet.insert(allocateResult->at(i));                        
 					}
 
 					delete allocateResult;
@@ -432,20 +514,39 @@ void RebalanceImpl::rebalanceByTopic(const std::string& topic)
 
 				// 更新本地队列
 				bool changed = updateProcessQueueTableInRebalance(topic, allocateResultSet);
+
+				
 				if (changed)
 				{
-					//TODO	log.info("reblance result is [{}], ConsumerId is [{}], mqAll is[{}], cidAll is [{}]",
-					//		allocateResult, this.mQClientFactory.getClientId(), mqAll, cidAll);
-
+					
 					messageQueueChanged(topic, mqSet, allocateResultSet);
-					//TODO log.info("messageQueueChanged {} {} {} {}",//
-					//	consumerGroup,//
-					//	topic,//
-					//	mqSet,//
-					//	allocateResultSet);
 
-					//log.info("messageQueueChanged consumerIdList: {}",//
-					//	cidAll);
+                    std::stringstream ssMqs;
+					std::set<MessageQueue>::iterator itMq = allocateResultSet.begin();
+                    for (; itMq != allocateResultSet.end(); itMq++)
+    				{
+    				    if(itMq != allocateResultSet.begin())
+                        {
+                            ssMqs<<",";
+                        }
+                        ssMqs<<itMq->getBrokerName()<<"["<<itMq->getQueueId()<<"]";
+    				}
+                    MqLogNotice("Message queue changed[topic:%s, consumerId:%s], MESSAGE_QUEUE:\n{%s}", 
+                        m_pMQClientFactory->getClientId().c_str(), topic.c_str(), ssMqs.str().c_str());
+
+					std::stringstream ssCids;
+					std::list<std::string>::iterator itCid = cidAll.begin();
+                    for (; itCid != cidAll.end(); itCid++)
+    				{
+    				    if(itCid != cidAll.begin())
+                        {
+                           ssCids<<","; 
+                        }
+                        ssCids<<*itCid;
+    				}
+					
+                    MqLogNotice("Message queue changed[topic:%s], CONSUMER_LIST:\n{%s}", 
+                        topic.c_str(), ssCids.str().c_str());
 				}
 			}
 			break;
@@ -460,58 +561,100 @@ bool RebalanceImpl::updateProcessQueueTableInRebalance(const std::string& topic,
 	bool changed = false;
 
 	// 将多余的队列删除
-	std::map<MessageQueue, ProcessQueue*> tmp;
+	//mjx modify add
+	//比如双主0备，1主挂了??
+	std:: string masterAddr = "";
+	std::map<MessageQueue, ProcessQueue*>::iterator it = m_processQueueTable.begin();
+
+	while(it != m_processQueueTable.end())
 	{
-		kpr::ScopedLock<kpr::Mutex> lock(m_processQueueTableLock);
-		std::map<MessageQueue, ProcessQueue*>::iterator it = m_processQueueTable.begin();
-
-		for ( ; it != m_processQueueTable.end();)
+		MessageQueue mq = it->first;
+		if (mq.getTopic() == topic)
 		{
-			MessageQueue mq = it->first;
-			if (mq.getTopic() == topic)
+			std::set<MessageQueue>::iterator its = mqSet.find(mq);
+			//mjx modify add
+			//该消息队列已经不存在了，从处理列表中删除关于该消息队列的所有信息
+			
+			if (its == mqSet.end())
 			{
-				std::set<MessageQueue>::iterator its = mqSet.find(mq);
-				if (its == mqSet.end())
+				changed = true;
+				ProcessQueue* pq = it->second;
+				if (pq != NULL)
 				{
-					changed = true;
-					ProcessQueue* pq = it->second;
-					std::map<MessageQueue, ProcessQueue*>::iterator ittmp = it;
-					it++;
-					m_processQueueTable.erase(ittmp);
-
-					if (pq != NULL)
-					{
-						tmp[mq]=pq;
-					}
-
+					pq->setDroped(true);
+					removeUnnecessaryMessageQueue(mq, *pq);					
 				}
-				else
-				{
-					it++;
-				}
+                MqLogNotice("doRebalance[topic=%s], remove unnecessary mq[broker=%s,queue=%d]",
+                    topic.c_str(), mq.getBrokerName().c_str(), mq.getQueueId());
+				
+				m_processQueueTable.erase(it++);
 			}
+
+			
 			else
 			{
+				//mjx modify add start
+				masterAddr = m_pMQClientFactory->findMasterBrokerAddrByTopicAndName(mq.getTopic(),mq.getBrokerName());
+				std::map<std::string,std::string>::iterator itor = m_brokerMaster.find(mq.getBrokerName()) ;
+				if(itor !=  m_brokerMaster.end())
+				{
+					int i = 0;
+					
+					if(itor->second != masterAddr)  //主备发生了切换，以前存储的broker master地址跟现在不同了
+					{
+						for(i=0; i<m_downBrokerName.size(); i++)
+						if(mq.getBrokerName() == m_downBrokerName[i])
+							break;
+					
+						if(i == m_downBrokerName.size() )
+						{
+							m_downBrokerName.push_back(mq.getBrokerName());
+							MqLogNotice("doRebalance: broker master %s is down,slave change to master",
+		                    		mq.getBrokerName().c_str());
+						}
+
+					}
+
+					
+					for(i=0; i<m_downBrokerName.size(); i++)
+						if(mq.getBrokerName() == m_downBrokerName[i])
+							break;
+					
+					if(i < m_downBrokerName.size() )
+						
+					{	//该messagequeue删除，重新从切过的master上面重新获取下
+						changed = true;
+						ProcessQueue* pq = it->second;
+						if (pq != NULL)
+						{
+							pq->setDroped(true);
+							removeUnnecessaryMessageQueue(mq, *pq);					
+						}
+
+						
+		                MqLogNotice("doRebalance:topic:%s,broker:%s,master and slave changed,before addr:%s,now addr:%s ",
+		                    topic.c_str(), mq.getBrokerName().c_str(),itor->second.c_str(),masterAddr.c_str() );
+						
+		                MqLogNotice("doRebalance[topic=%s], master and slave changed, get message queue from new master[broker=%s,queue=%d]",
+		                    topic.c_str(), mq.getBrokerName().c_str(), mq.getQueueId());
+						
+						m_processQueueTable.erase(it++);
+
+						continue;
+
+					}
+				}
+
+				//mjx modify add start add end
+					
 				it++;
 			}
 		}
+		else
+		{
+			it++;
+		}
 	}
-
-	std::map<MessageQueue, ProcessQueue*>::iterator itTmp = tmp.begin();
-
-	for ( ; itTmp != tmp.end();itTmp++)
-	{
-		ProcessQueue* pq = itTmp->second;
-		MessageQueue mq = itTmp->first;
-		pq->setDropped(true);
-		removeUnnecessaryMessageQueue(mq, *pq);
-		//TODO log.info("doRebalance, {}, remove unnecessary mq, {}",
-		//	consumerGroup, mq);
-
-		//TODO 怎么删除ProcessQueue？
-	}
-
-	tmp.clear();
 
 	// 增加新增的队列
 	std::list<PullRequest*> pullRequestList;
@@ -519,19 +662,10 @@ bool RebalanceImpl::updateProcessQueueTableInRebalance(const std::string& topic,
 	std::set<MessageQueue>::iterator its = mqSet.begin();
 	for (; its != mqSet.end(); its++)
 	{
-		
 		MessageQueue mq = *its;
-		bool find = false;
-		{
-			kpr::ScopedLock<kpr::Mutex> lock(m_processQueueTableLock);
-			std::map<MessageQueue, ProcessQueue*>::iterator itm = m_processQueueTable.find(mq);
-			if (itm != m_processQueueTable.end())
-			{
-				find = true;
-			}
-		}
+		std::map<MessageQueue, ProcessQueue*>::iterator itm = m_processQueueTable.find(mq);
 
-		if (!find)
+		if (itm == m_processQueueTable.end())
 		{
 			PullRequest* pullRequest = new PullRequest();
 			pullRequest->setConsumerGroup(m_consumerGroup);
@@ -540,19 +674,34 @@ bool RebalanceImpl::updateProcessQueueTableInRebalance(const std::string& topic,
 
 			// 这个需要根据策略来设置
 			long long nextOffset = computePullFromWhere(mq);
+			
 			if (nextOffset >= 0)
 			{
 				pullRequest->setNextOffset(nextOffset);
 				pullRequestList.push_back(pullRequest);
 				changed = true;
-				kpr::ScopedLock<kpr::Mutex> lock(m_processQueueTableLock);
 				m_processQueueTable[mq] = pullRequest->getProcessQueue();
-				//TODO log.info("doRebalance, {}, add a new mq, {}", consumerGroup, mq);
+
+				//mjx modify add start
+				masterAddr = m_pMQClientFactory->findMasterBrokerAddrByTopicAndName(mq.getTopic(),mq.getBrokerName());
+
+				if(masterAddr != "")
+					m_brokerMaster[mq.getBrokerName()] = masterAddr;
+				
+				MqLogNotice("doRebalance[topic=%s], broker=%s,ipaddr=%s",
+                    topic.c_str(), mq.getBrokerName().c_str(),masterAddr.c_str());
+				
+				//mjx modify add end
+					
+				MqLogNotice("doRebalance[topic=%s], add a new mq[broker=%s,queue=%d]",
+                    topic.c_str(), mq.getBrokerName().c_str(), mq.getQueueId());
 			}
 			else
 			{
 				// 等待此次Rebalance做重试
-				//TODO log.warn("doRebalance, {}, add new mq failed, {}", consumerGroup, mq);
+				delete pullRequest;
+				MqLogWarn("doRebalance[topic=%s], add a new mq failed[broker=%s,queue=%d]: can't get offset!",
+                    topic.c_str(), mq.getBrokerName().c_str(), mq.getQueueId());
 			}
 		}
 	}
@@ -565,10 +714,11 @@ bool RebalanceImpl::updateProcessQueueTableInRebalance(const std::string& topic,
 void RebalanceImpl::truncateMessageQueueNotMyTopic()
 {
 	std::map<std::string, SubscriptionData> subTable = getSubscriptionInner();
-	kpr::ScopedLock<kpr::Mutex> lock(m_processQueueTableLock);
 	std::map<MessageQueue, ProcessQueue*>::iterator it = m_processQueueTable.begin();
 
-	for ( ; it != m_processQueueTable.end();)
+    /* modified by yu.guangjie at 2015-08-20, reason: use while loop */
+    //for ( ; it != m_processQueueTable.end(); it++)
+	while(it != m_processQueueTable.end())
 	{
 		MessageQueue mq = it->first;
 		std::map<std::string, SubscriptionData>::iterator itt = subTable.find(mq.getTopic());
@@ -578,17 +728,29 @@ void RebalanceImpl::truncateMessageQueueNotMyTopic()
 			ProcessQueue* pq = it->second;
 			if (pq != NULL)
 			{
-				pq->setDropped(true);
+				pq->setDroped(true);
 				//TODO log.info("doRebalance, {}, truncateMessageQueueNotMyTopic remove unnecessary mq, {}",
 				//	consumerGroup, mq);
 			}
-			std::map<MessageQueue, ProcessQueue*>::iterator ittmp = it;
-			it++;
-			m_processQueueTable.erase(ittmp);
+			m_processQueueTable.erase(it++);
 		}
 		else
 		{
 			it++;
 		}
 	}
+}
+
+void RebalanceImpl::removeProcessQueue(MessageQueue& mq)
+{
+    std::map<MessageQueue, ProcessQueue*>::iterator itt = m_processQueueTable.find(mq);
+    if (itt != m_processQueueTable.end())
+    {
+        ProcessQueue* processQueue = itt->second;
+        m_processQueueTable.erase(itt);
+        processQueue->setDroped(true);
+
+        removeUnnecessaryMessageQueue(mq, *processQueue);
+        MqLogVerb("Fix Offset, remove unnecessary mq,  Droped: \n");
+    }
 }

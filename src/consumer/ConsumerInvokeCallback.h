@@ -29,13 +29,13 @@ class MQClientAPIImpl;
 class ConsumerInvokeCallback : public InvokeCallback
 {
 public:
-	ConsumerInvokeCallback(PullCallback* pPullCallback,MQClientAPIImpl* pMQClientAPIImpl);
+	ConsumerInvokeCallback(PullCallback* pPullCallback, MQClientAPIImpl* pClientAPIImpl);
 	virtual ~ConsumerInvokeCallback();
 	virtual void operationComplete(ResponseFuture* pResponseFuture);
 
 private:
 	PullCallback* m_pPullCallback;
-	MQClientAPIImpl* m_pMQClientAPIImpl;
+    MQClientAPIImpl *m_pClientAPIImpl;
 };
 
 #endif

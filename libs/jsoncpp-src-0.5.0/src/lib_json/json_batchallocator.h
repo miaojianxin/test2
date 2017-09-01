@@ -6,7 +6,8 @@
 
 # ifndef JSONCPP_DOC_EXCLUDE_IMPLEMENTATION
 
-namespace Json {
+/* modified by yu.guangjie at 2015-10-14, reason: change Json to MQJson*/
+namespace MQJson {
 
 /* Fast memory allocator.
  *

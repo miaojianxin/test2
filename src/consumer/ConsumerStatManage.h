@@ -20,6 +20,11 @@
 #include <string>
 
 #include "AtomicValue.h"
+#include "UtilAll.h"
+#include "KPRUtil.h"
+#include "Mutex.h"
+#include "ScopedLock.h"
+
 
 /**
 * Consumer内部运行时统计信息
@@ -58,6 +63,11 @@ public:
 	*/
 	void recordSnapshotPeriodically()
 	{
+	    m_consumertat.createTimestamp = GetCurrentTimeMillis();
+
+		//mjx modify add
+		kpr::ScopedLock<kpr::Mutex> lock(m_mutex);
+		
 		m_snapshotList.push_back(m_consumertat);
 		if (m_snapshotList.size() > 60)
 		{
@@ -70,6 +80,9 @@ public:
 	*/
 	void logStatsPeriodically(std::string& group, std::string& clientId)
 	{
+		//mjx modify add
+		kpr::ScopedLock<kpr::Mutex> lock(m_mutex);
+		
 		if (m_snapshotList.size() >= 60)
 		{
 			ConsumerStat& first = m_snapshotList.front();
@@ -87,16 +100,10 @@ public:
 					/(double) (last.createTimestamp - first.createTimestamp);
 
 				tps *= 1000;
-
-				//log.info(
-				//	"Consumer, {} {}, ConsumeAvgRT: {} ConsumeMaxRT: {} TotalOKMsg: {} TotalFailedMsg: {} consumeTPS: {}",
-				//	group,
-				//	clientId,
-				//	avgRT,
-				//	last.consumeMsgRTMax,
-				//	last.consumeMsgOKTotal,
-				//	last.consumeMsgFailedTotal,
-				//	tps);
+                MqLogVerb("Consumer:{group=%s,client=%s}, ConsumeAvgRT:%.2f, ConsumeMaxRT:%ld,"
+                    "TotalOKMsg:%ld, TotalFailedMsg:%ld, consumeTPS:%.2f",
+                    group.c_str(), clientId.c_str(), avgRT, last.consumeMsgRTMax.Get(),
+                    last.consumeMsgOKTotal.Get(), last.consumeMsgFailedTotal.Get(), tps);
 			}
 
 			// 拉消息情况
@@ -104,11 +111,8 @@ public:
 				double avgRT = (last.pullRTTotal.Get() - first.pullRTTotal.Get())
 					/(double) (last.pullTimesTotal.Get() - first.pullTimesTotal.Get());
 
-				//log.info("Consumer, {} {}, PullAvgRT: {}  PullTimesTotal: {}",
-				//	group,
-				//	clientId,
-				//	avgRT,
-				//	last.pullTimesTotal);
+                MqLogVerb("Consumer:{group=%s,client=%s}, PullAvgRT:%.2f, PullTimesTotal:%ld",
+                    group.c_str(), clientId.c_str(), avgRT, last.pullTimesTotal.Get());
 			}
 		}
 	}
@@ -116,6 +120,9 @@ public:
 private:
 	ConsumerStat m_consumertat;
 	std::list<ConsumerStat> m_snapshotList;
+	//mjx modify add
+	//m_snapshotList被两个线程并发使用，需要加锁
+	kpr::Mutex m_mutex;
 };
 
 #endif

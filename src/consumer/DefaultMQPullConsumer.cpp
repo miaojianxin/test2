@@ -19,6 +19,7 @@
 #include <list>
 #include <string>
 
+#include "OffsetStore.h"
 #include "MessageQueue.h"
 #include "MessageExt.h"
 #include "ClientConfig.h"
@@ -83,7 +84,7 @@ long long DefaultMQPullConsumer::earliestMsgStoreTime(const MessageQueue& mq)
 	return m_pDefaultMQPullConsumerImpl->earliestMsgStoreTime(mq);
 }
 
-MessageExt DefaultMQPullConsumer::viewMessage(const std::string& msgId)
+MessageExt* DefaultMQPullConsumer::viewMessage(const std::string& msgId)
 {
 	return m_pDefaultMQPullConsumerImpl->viewMessage(msgId);
 }
@@ -192,6 +193,7 @@ std::set<MessageQueue>* DefaultMQPullConsumer::fetchSubscribeMessageQueues(const
 void DefaultMQPullConsumer::start()
 {
 	m_pDefaultMQPullConsumerImpl->start();
+	setOffsetStore(m_pDefaultMQPullConsumerImpl->getOffsetStore());
 }
 
 void DefaultMQPullConsumer::shutdown()
@@ -245,7 +247,12 @@ long long DefaultMQPullConsumer::fetchConsumeOffset(MessageQueue& mq, bool fromS
 	return m_pDefaultMQPullConsumerImpl->fetchConsumeOffset(mq, fromStore);
 }
 
-std::set<MessageQueue*> DefaultMQPullConsumer::fetchMessageQueuesInBalance(const std::string& topic)
+void DefaultMQPullConsumer::persistConsumeOffset(MessageQueue& mq)
+{
+    m_pDefaultMQPullConsumerImpl->getOffsetStore()->persist(mq);
+}
+
+std::set<MessageQueue> DefaultMQPullConsumer::fetchMessageQueuesInBalance(const std::string& topic)
 {
 	return m_pDefaultMQPullConsumerImpl->fetchMessageQueuesInBalance(topic);
 }
@@ -264,4 +271,16 @@ void DefaultMQPullConsumer::setOffsetStore(OffsetStore* offsetStore)
 DefaultMQPullConsumerImpl* DefaultMQPullConsumer::getDefaultMQPullConsumerImpl()
 {
 	return m_pDefaultMQPullConsumerImpl;
+}
+
+void DefaultMQPullConsumer::setTcpTimeoutMilliseconds(int milliseconds)
+{
+	NULL == m_pDefaultMQPullConsumerImpl ? 
+		NULL :
+		(m_pDefaultMQPullConsumerImpl->setTcpTimeoutMilliseconds(milliseconds), NULL);
+}
+
+int DefaultMQPullConsumer::getTcpTimeoutMilliseconds()
+{
+	return m_pDefaultMQPullConsumerImpl->getTcpTimeoutMilliseconds();
 }

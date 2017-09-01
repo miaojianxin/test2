@@ -136,7 +136,8 @@ public:
 	* @return 返回队列集合
 	* @throws MQClientException
 	*/
-	virtual std::set<MessageQueue*> fetchMessageQueuesInBalance(const std::string& topic)=0;
+	//lin.qs, 原先返回的是 set<MessageQueue*>，指针引用内部可能变化的资源，不允许
+	virtual std::set<MessageQueue> fetchMessageQueuesInBalance(const std::string& topic)=0;
 };
 
 #endif

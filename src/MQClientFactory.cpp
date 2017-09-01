@@ -20,7 +20,6 @@
 #include <set>
 #include <string>
 #include <vector>
-#include <algorithm>
 
 #include "RemoteClientConfig.h"
 #include "ClientRemotingProcessor.h"
@@ -46,6 +45,8 @@ long MQClientFactory::LockTimeoutMillis = 3000;
 
 MQClientFactory::MQClientFactory(ClientConfig& clientConfig, int factoryIndex, const std::string& clientId)
 {
+	m_tcpTimeoutMillseconds = MixAll::DEFAULT_TCP_TIMEOUT_MILLISECONDS;
+
 	m_clientConfig = clientConfig;
 	m_factoryIndex = factoryIndex;
 	m_pRemoteClientConfig = new RemoteClientConfig();
@@ -97,7 +98,6 @@ MQClientFactory::~MQClientFactory()
 
 void MQClientFactory::start()
 {
-	Logger::get_logger()->info("Starting MQClientFactory");
 	kpr::ScopedLock<kpr::Mutex> lock(m_mutex);
 	switch (m_serviceState)
 	{
@@ -117,17 +117,15 @@ void MQClientFactory::start()
 		m_pRebalanceService->Start();
 
 		m_pDefaultMQProducer->getDefaultMQProducerImpl()->start(false);
+		
+
 		m_serviceState = RUNNING;
-		Logger::get_logger()->info("MQClientFactory started");
 		break;
 	case RUNNING:
-		Logger::get_logger()->warn("MQClientFactory is already running.");
 		break;
 	case SHUTDOWN_ALREADY:
-		Logger::get_logger()->error("MQClientFactory should have already been shutted down");
 		break;
 	case START_FAILED:
-		Logger::get_logger()->error("MQClientFactory started failed.");
 		THROW_MQEXCEPTION(MQClientException,"The Factory object start failed",-1);
 	default:
 		break;
@@ -154,12 +152,16 @@ void MQClientFactory::sendHeartbeatToAllBrokerWithLock()
 	}
 }
 
-void MQClientFactory::updateTopicRouteInfoFromNameServer()
+//mjx cunsumer_table_lock bug fix
+void MQClientFactory::updateTopicRouteInfoFromNameServer(bool bLocked)
 {
 	std::set<std::string> topicList;
 
 	// Consumer对象
 	{
+		//add by lin.qiongshan, 2016年8月30日, m_consumerTable 操作应该加锁
+		kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+
 		std::map<std::string, MQConsumerInner*>::iterator it = m_consumerTable.begin();
 
 		for (; it!=m_consumerTable.end(); it++)
@@ -176,6 +178,9 @@ void MQClientFactory::updateTopicRouteInfoFromNameServer()
 
 	// Producer
 	{
+		//add by lin.qiongshan, 2016年8月30日, m_producerTable 操作应该加锁
+		kpr::ScopedLock<kpr::Mutex> lock(m_producerTableLock);
+
 		std::map<std::string, MQProducerInner*>::iterator it = m_producerTable.begin();
 
 		for (; it!=m_producerTable.end(); it++)
@@ -189,40 +194,44 @@ void MQClientFactory::updateTopicRouteInfoFromNameServer()
 	std::set<std::string>::iterator it2 = topicList.begin();
 	for (; it2!=topicList.end(); it2++)
 	{
-		updateTopicRouteInfoFromNameServer(*it2);
+		updateTopicRouteInfoFromNameServer(*it2,bLocked);
 	}
 }
 
-bool MQClientFactory::updateTopicRouteInfoFromNameServer(const std::string& topic)
+bool MQClientFactory::updateTopicRouteInfoFromNameServer(const std::string& topic, bool bLocked)
 {
-	return updateTopicRouteInfoFromNameServer(topic, false, NULL);
+	return updateTopicRouteInfoFromNameServer(topic, false, NULL,bLocked);
 }
 
 bool MQClientFactory::updateTopicRouteInfoFromNameServer(const std::string& topic,
 		bool isDefault,
-		DefaultMQProducer* pDefaultMQProducer)
+		DefaultMQProducer* pDefaultMQProducer,bool bLocked)
 {
 	try
 	{
-		if (m_lockNamesrv.TryLock())
+	    MqLogVerb("update topic[%s] routeinfo, isDefault:%s.", 
+            topic.c_str(), isDefault?"TRUE":"FALSE");
+		if (m_lockNamesrv.Lock(MQClientFactory::LockTimeoutMillis))
 		{
-			TopicRouteData* topicRouteData = NULL;
 			try
 			{
-				
+				TopicRouteData* topicRouteData;
 				if (isDefault && pDefaultMQProducer != NULL)
 				{
 					topicRouteData =
 						m_pMQClientAPIImpl->getDefaultTopicRouteInfoFromNameServer(
-							pDefaultMQProducer->getCreateTopicKey(), 1000 * 3);
+							//pDefaultMQProducer->getCreateTopicKey(), 1000 * 3); mdy by lin.qiongshan, 2016-9-2，TCP 操作超时配置化
+							pDefaultMQProducer->getCreateTopicKey(), getTcpTimeoutMilliseconds());
 					if (topicRouteData != NULL)
 					{
-						std::list<QueueData> dataList = topicRouteData->getQueueDatas();
+						//mdy by lin.qiongshan, 2016-11-22，bug: dataList 要声明为引用（&），否则对其修改不会影响 topicRouteData 内的数据
+						std::list<QueueData>& dataList = topicRouteData->getQueueDatas();
 
 						std::list<QueueData>::iterator it= dataList.begin();
 						for(; it!=dataList.end(); it++)
 						{
-							QueueData data = *it;
+							//mdy by lin.qiongshan, 2016-11-22，bug: data 要声明为引用（&），否则对其修改不会影响 topicRouteData 内的数据
+							QueueData& data = *it;
 							// 读写分区个数是一致，故只做一次判断
 							int queueNums =
 								std::min<int>(pDefaultMQProducer->getDefaultTopicQueueNums(),
@@ -260,6 +269,9 @@ bool MQClientFactory::updateTopicRouteInfoFromNameServer(const std::string& topi
 						changed=true;
 					}
 
+                    MqLogDebug("update topic[%s] routeinfo, changed:%s.", 
+                        topic.c_str(), isDefault?"TRUE":"FALSE");
+
 					if (changed)
 					{
 						// 后面排序会影响下次的equal逻辑判断，所以先clone一份
@@ -268,18 +280,32 @@ bool MQClientFactory::updateTopicRouteInfoFromNameServer(const std::string& topi
 						// 更新Broker地址信息
 						std::list<BrokerData> dataList = topicRouteData->getBrokerDatas();
 
+						std::list<BrokerData>::iterator it= dataList.begin();
+						for(; it!=dataList.end(); it++)
 						{
-							kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
-							std::list<BrokerData>::iterator it= dataList.begin();
-
-							for(; it!=dataList.end(); it++)
-							{
-								m_brokerAddrTable[(*it).brokerName]=(*it).brokerAddrs;
-							}
+                            /* modified by yu.guangjie at 2015-11-04, reason: */
+                            kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
+							m_brokerAddrTable[(*it).brokerName]=(*it).brokerAddrs;
 						}
 
 						// 更新发布队列信息
 						{
+							//add by lin.qiongshan, 2016年8月30日, m_producerTable 操作应该加锁
+							kpr::ScopedLock<kpr::Mutex> lock(m_producerTableLock);
+
+							//[bug] mdy by lin.qiongshan，2016-11-22
+							//
+							//	在 DefaultMQProducerImpl::updateTopicPublishInfo 方法内部，DefaultMQProducerImpl 对象会将传入的路由信息（TopicPublishInfo）保存到其成员中（m_topicPublishInfoTable）
+							//	保存过程中，m_topicPublishInfoTable 保存了传入的 TopicPublishInfo 对象的一份复制
+							//	TopicPublishInfo 对象内部保存了队列信息（MessageQueue），是通过 vector 容器保存了一组 MessageQueue 的指针
+							//	虽然 m_topicPublishInfoTable 保存的是传入的 TopicPublishInfo 对象的复制，但复制的时候，MessageQueue 的指针也一起复制了过去，而不是创建新的 MessageQueue
+							//	这就导致，此处会删除 TopicPublishInfo，而 DefaultMQProducerImpl 的一些流程也会清理 TopicPublishInfo 内部的 MessageQueue 数据（TopicPublishInfo::clearMessageQueue，此处也会删除 MessageQueue 对象），这就导致对同一个指针重复删除，程序 coredump
+							//
+							//  而且，这里如果有多个 Producer 的话，该 TopicPublishInfo 会复制到多个 Producer 对象中
+							//
+							//修改方案：
+							//	修改 TopicPublishInfo，增加复制构造函数和赋值操作符重载，拷贝 MessageQueue 对象时创建新的 MessageQueue 对象
+							//	修改 TopicPublishInfo，增加析构函数，析构时要删除 MessageQueue 指针对象
 							TopicPublishInfo* publishInfo =
 								topicRouteData2TopicPublishInfo(topic, *topicRouteData);
 							std::map<std::string, MQProducerInner*>::iterator it = m_producerTable.begin();
@@ -291,10 +317,16 @@ bool MQClientFactory::updateTopicRouteInfoFromNameServer(const std::string& topi
 									impl->updateTopicPublishInfo(topic, *publishInfo);
 								}
 							}
+                            delete publishInfo;
 						}
 
+						//mjx consumer_table_lock bug fix
+						if(!bLocked)
 						// 更新订阅队列信息
 						{
+							//add by lin.qiongshan, 2016年8月30日, m_consumerTable 操作应该加锁
+							kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+
 							std::set<MessageQueue>* subscribeInfo =
 								topicRouteData2TopicSubscribeInfo(topic, *topicRouteData);
 							std::map<std::string, MQConsumerInner*>::iterator it = m_consumerTable.begin();
@@ -306,39 +338,59 @@ bool MQClientFactory::updateTopicRouteInfoFromNameServer(const std::string& topi
 									impl->updateTopicSubscribeInfo(topic, *subscribeInfo);
 								}
 							}
+                            delete subscribeInfo;
 						}
 
+						else
+						//mjx consumer_table_lock bug fix
+						//外层已经加过锁
+						{	
 
-						m_topicRouteTable[topic]= cloneTopicRouteData;
-						m_lockNamesrv.Unlock();
+						 // kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+							std::set<MessageQueue>* subscribeInfo =
+								topicRouteData2TopicSubscribeInfo(topic, *topicRouteData);
+							std::map<std::string, MQConsumerInner*>::iterator it = m_consumerTable.begin();
+							for(; it!= m_consumerTable.end(); it++)
+							{
+								MQConsumerInner* impl = it->second;
+								if (impl)
+								{
+									impl->updateTopicSubscribeInfo(topic, *subscribeInfo);
+								}
+							}
+                            delete subscribeInfo;
 
-						delete topicRouteData;
-						return true;
+
+						}
+
+						m_topicRouteTable[topic]= cloneTopicRouteData;						
 					}
+                    /* modified by yu.guangjie at 2015-08-28, reason: */
+                    delete topicRouteData;	
 				}
 				else
 				{
 					//TODO log?
+					MqLogWarn("Can't find topic[%s] routeinfo!", topic.c_str());
 				}
+                m_lockNamesrv.Unlock();
+                return true;
 			}
 			catch (...)
 			{
+				m_lockNamesrv.Unlock();
 				//TODO log?
-				if (topicRouteData != NULL)
-				{
-					delete topicRouteData;
-				}
 			}
-
-			m_lockNamesrv.Unlock();
 		}
 		else
 		{
 			//TODO log?
+			MqLogWarn("lock Namesrv failed!");
 		}
 	}
 	catch (...)
 	{
+	    MqLogWarn("updateTopicRouteInfoFromNameServer error!");
 		//TODO log?
 	}
 
@@ -506,6 +558,8 @@ bool MQClientFactory::registerConsumer(const std::string& group, MQConsumerInner
 		return false;
 	}
 
+    kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+    
 	if (m_consumerTable.find(group)!=m_consumerTable.end())
 	{
 		return false;
@@ -518,7 +572,11 @@ bool MQClientFactory::registerConsumer(const std::string& group, MQConsumerInner
 
 void MQClientFactory::unregisterConsumer(const std::string& group)
 {
-	m_consumerTable.erase(group);
+    {
+        kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+        m_consumerTable.erase(group);
+    }
+	
 	unregisterClientWithLock("", group);
 }
 
@@ -528,6 +586,9 @@ bool MQClientFactory::registerProducer(const std::string& group, DefaultMQProduc
 	{
 		return false;
 	}
+
+	//add by lin.qiongshan, 2016年8月30日, m_producerTable 操作应该加锁
+	kpr::ScopedLock<kpr::Mutex> lock(m_producerTableLock);
 
 	if (m_producerTable.find(group)!=m_producerTable.end())
 	{
@@ -541,7 +602,12 @@ bool MQClientFactory::registerProducer(const std::string& group, DefaultMQProduc
 
 void MQClientFactory::unregisterProducer(const std::string& group)
 {
-	m_producerTable.erase(group);
+	{
+		//add by lin.qiongshan, 2016年8月30日, m_producerTable 操作应该加锁
+		kpr::ScopedLock<kpr::Mutex> lock(m_producerTableLock);
+		m_producerTable.erase(group);
+	}
+	
 	unregisterClientWithLock(group, "");
 }
 
@@ -574,11 +640,20 @@ void MQClientFactory::rebalanceImmediately()
 
 void MQClientFactory::doRebalance()
 {
+	//add by lin.qiongshan, 2016年8月30日, m_consumerTable 操作应该加锁
+	//	Mark by lin.qiongshan, 2016-11-3, 此处不能加锁。在 doRebalance 方法会递归调用到 updateTopicRouteInfoFromNameServer 方法，而该方法也会对该锁对象加锁，导致死锁
+	//		保留更底层的加锁，删除此处的加锁
+	//mjx consumer_table_lock bug fix
+	//不加锁会core，通过函数掉tag避免在同一个线程中嵌套加锁
+	//或者通过加个线程的独有全局变量__thread XX控制下
+	kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+
 	std::map<std::string, MQConsumerInner*>::iterator it = m_consumerTable.begin();
 
 	for (; it!=m_consumerTable.end(); it++)
 	{
 		MQConsumerInner* impl =it->second;
+		
 		if (impl != NULL)
 		{
 			try
@@ -595,6 +670,9 @@ void MQClientFactory::doRebalance()
 
 MQProducerInner* MQClientFactory::selectProducer(const std::string& group)
 {
+	//add by lin.qiongshan, 2016年8月30日, m_producerTable 操作应该加锁
+	kpr::ScopedLock<kpr::Mutex> lock(m_producerTableLock);
+
 	std::map<std::string, MQProducerInner*>::iterator it = m_producerTable.find(group);
 	if (it!=m_producerTable.end())
 	{
@@ -606,6 +684,9 @@ MQProducerInner* MQClientFactory::selectProducer(const std::string& group)
 
 MQConsumerInner* MQClientFactory::selectConsumer(const std::string& group)
 {
+	//add by lin.qiongshan, 2016年8月30日, m_consumerTable 操作应该加锁
+	kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+
 	std::map<std::string, MQConsumerInner*>::iterator it = m_consumerTable.find(group);
 	if (it!=m_consumerTable.end())
 	{
@@ -617,47 +698,52 @@ MQConsumerInner* MQClientFactory::selectConsumer(const std::string& group)
 
 FindBrokerResult MQClientFactory::findBrokerAddressInAdmin(const std::string& brokerName)
 {
-	FindBrokerResult result;
-	std::string brokerAddr;
-	bool slave = false;
-	bool found = false;
-	kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
-	std::map<std::string, std::map<int, std::string> >::iterator it = m_brokerAddrTable.find(brokerName);
 
-	if (it!=m_brokerAddrTable.end())
+    std::string brokerAddr = "";
+    bool slave = false;
+    bool found = false;
+
+    /* modified by yu.guangjie at 2015-11-04, reason: */
+    kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
+    
+    std::map<std::string, std::map<int, std::string> >::iterator it = m_brokerAddrTable.find(brokerName);
+
+	if (it != m_brokerAddrTable.end())
 	{
-		// TODO 如果有多个Slave，可能会每次都选中相同的Slave，这里需要优化
-		std::map<int, std::string>::iterator it1 = it->second.begin();
-		for (;it1!=it->second.end();it1++)
+		std::map<int, std::string>::iterator it1 = it->second.find(MixAll::MASTER_ID);
+		for (; it1 != it->second.end(); it1++)
 		{
-			int id = it1->first;
-			brokerAddr = it1->second;
-			if (!brokerAddr.empty())
-			{
-				found = true;
-				if (MixAll::MASTER_ID == id)
-				{
-					slave = false;
-				}
-				else
-				{
-					slave = true;
-				}
-
-				break;
-			}
+		    brokerAddr = it1->second;
+		    if(brokerAddr != "")
+            {
+                found = true;
+                if (MixAll::MASTER_ID == it1->first) {
+                    slave = false;
+                }
+                else 
+                {
+                    slave = true;
+                }
+                break;
+            }
 		}
 	}
 
-	result.brokerAddr = brokerAddr;
-	result.slave = slave;
-
+    FindBrokerResult result;
+    
+    if (found) 
+    {
+        result.brokerAddr = brokerAddr;
+        result.slave = slave;
+    }
 	return result;
 }
 
 std::string MQClientFactory::findBrokerAddressInPublish(const std::string& brokerName)
 {
-	kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
+    /* modified by yu.guangjie at 2015-11-04, reason: */
+    kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
+    
 	std::map<std::string, std::map<int, std::string> >::iterator it = m_brokerAddrTable.find(brokerName);
 
 	if (it!=m_brokerAddrTable.end())
@@ -679,7 +765,10 @@ FindBrokerResult MQClientFactory::findBrokerAddressInSubscribe(const std::string
 	std::string brokerAddr="";
 	bool slave = false;
 	bool found = false;
-	kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
+
+    /* modified by yu.guangjie at 2015-11-04, reason: */
+    kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
+    
 	std::map<std::string, std::map<int, std::string> >::iterator it = m_brokerAddrTable.find(brokerName);
 
 	if (it!=m_brokerAddrTable.end())
@@ -691,7 +780,8 @@ FindBrokerResult MQClientFactory::findBrokerAddressInSubscribe(const std::string
 			slave = (brokerId != MixAll::MASTER_ID);
 			found = true;
 		}
-		else
+		/* modified by yu.guangjie at 2015-08-25, reason: check onlyThisBroker */
+		else if(!onlyThisBroker)
 		{
 			it1 = it->second.begin();
 			brokerAddr =it1->second;
@@ -713,7 +803,9 @@ std::list<std::string> MQClientFactory::findConsumerIdList(const std::string& to
 
 	if (brokerAddr.empty())
 	{
-		updateTopicRouteInfoFromNameServer(topic);
+		//mjx consumer_table_lock bug fix
+		//
+		updateTopicRouteInfoFromNameServer(topic,true);
 		brokerAddr = findBrokerAddrByTopic(topic);
 	}
 
@@ -721,7 +813,7 @@ std::list<std::string> MQClientFactory::findConsumerIdList(const std::string& to
 	{
 		try
 		{
-			return m_pMQClientAPIImpl->getConsumerIdListByGroup(brokerAddr, group, 3000);
+			return m_pMQClientAPIImpl->getConsumerIdListByGroup(brokerAddr, group, getTcpTimeoutMilliseconds()/*3000 mdy by lin.qiongshan, 2016-9-2，TCP 操作超时配置化*/);
 		}
 		catch (...)
 		{
@@ -751,6 +843,57 @@ std::string MQClientFactory::findBrokerAddrByTopic(const std::string& topic)
 
 	return "";
 }
+
+
+//mjx modify add
+
+std::string MQClientFactory::findBrokerNameByTopic(const std::string& topic)
+{
+	std::map<std::string, TopicRouteData>::iterator it = m_topicRouteTable.find(topic);
+
+	if (it!=m_topicRouteTable.end())
+	{
+		const std::list<BrokerData>& brokers = it->second.getBrokerDatas();
+
+		if (!brokers.empty())
+		{
+			BrokerData bd = brokers.front();
+			return bd.brokerName;
+		}
+	}
+
+	return "";
+}
+
+//mjx modify add
+
+std::string MQClientFactory::findMasterBrokerAddrByTopicAndName(const std::string& topic,const std::string & brokerName)
+{
+	std::map<std::string, TopicRouteData>::iterator it = m_topicRouteTable.find(topic);
+
+	if (it!=m_topicRouteTable.end())
+	{
+		const std::list<BrokerData>& brokers = it->second.getBrokerDatas();
+
+		if (!brokers.empty())
+		{
+			std::list<BrokerData>::const_iterator itor = brokers.begin();
+			for(; itor != brokers.end(); itor++)
+				if(itor->brokerName == brokerName)
+				{
+					return TopicRouteData::selectBrokerAddr(const_cast<BrokerData&>(*itor));
+
+				}
+			
+		}
+	}
+
+	return "";
+}
+
+
+
+
 
 TopicRouteData MQClientFactory::getAnExistTopicRouteData(const std::string& topic)
 {
@@ -796,6 +939,22 @@ DefaultMQProducer* MQClientFactory::getDefaultMQProducer()
 	return m_pDefaultMQProducer;
 }
 
+void MQClientFactory::setTcpTimeoutMilliseconds(int milliseconds)
+{
+	m_tcpTimeoutMillseconds = milliseconds;
+
+	//2nd operand, 3rd operand 的返回类型必须是兼容的，因此将 3rd operand 使用逗号表达式，返回 NULL
+	//	因为操作符优先级问题，3rd operand 的逗号表达式必须使用圆括号包围
+	NULL == m_pMQAdminImpl ?
+		NULL:
+		(m_pMQAdminImpl->setTcpTimeoutMillseconds(milliseconds), NULL);
+}
+
+int MQClientFactory::getTcpTimeoutMilliseconds()
+{
+	return m_tcpTimeoutMillseconds;
+}
+
 void MQClientFactory::sendHeartbeatToAllBroker()
 {
 	HeartbeatData* heartbeatData = prepareHeartbeatData();
@@ -806,24 +965,19 @@ void MQClientFactory::sendHeartbeatToAllBroker()
 		return;
 	}
 
-	std::vector<std::map<int, std::string> > addrlist;
+    /* modified by yu.guangjie at 2015-11-04, reason: */
+    std::map<std::string, std::map<int, std::string> > tmpBroker;
+    {        
+        kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
+        tmpBroker = m_brokerAddrTable;
+    }
+
+	std::map<std::string, std::map<int, std::string> >::iterator it = tmpBroker.begin();
+
+	for (; it!=tmpBroker.end(); it++)
 	{
-		kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
-		std::map<std::string, std::map<int, std::string> >::iterator it = m_brokerAddrTable.begin();
-
-		for (; it!=m_brokerAddrTable.end(); it++)
-		{
-			addrlist.push_back(it->second);
-		}
-	}
-
-	std::vector<std::map<int, std::string> >::iterator it = addrlist.begin();
-
-	for (; it!=addrlist.end(); it++)
-	{
-		std::map<int, std::string> addrs = *it;
-		std::map<int, std::string>::iterator it1 = addrs.begin();
-		for (; it1!=addrs.end(); it1++)
+		std::map<int, std::string>::iterator it1 = it->second.begin();
+		for (; it1!=it->second.end(); it1++)
 		{
 			std::string& addr = it1->second;
 			if (!addr.empty())
@@ -837,7 +991,7 @@ void MQClientFactory::sendHeartbeatToAllBroker()
 
 				try
 				{
-					m_pMQClientAPIImpl->sendHearbeat(addr, heartbeatData, 3000);
+					m_pMQClientAPIImpl->sendHearbeat(addr, heartbeatData, getTcpTimeoutMilliseconds()/*3000 mdy by lin.qiongshan, 2016-9-2，TCP 操作超时配置化 */);
 				}
 				catch (...)
 				{
@@ -845,6 +999,8 @@ void MQClientFactory::sendHeartbeatToAllBroker()
 			}
 		}
 	}
+    /* modified by yu.guangjie at 2015-08-28, reason: delete heartbeatData */
+    delete heartbeatData;
 }
 
 HeartbeatData* MQClientFactory::prepareHeartbeatData()
@@ -856,6 +1012,9 @@ HeartbeatData* MQClientFactory::prepareHeartbeatData()
 
 	// Consumer
 	{
+		//add by lin.qiongshan, 2016年8月30日, m_consumerTable 操作应该加锁
+		kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+
 		std::map<std::string, MQConsumerInner*>::iterator it = m_consumerTable.begin();
 
 		for (; it!=m_consumerTable.end(); it++)
@@ -877,6 +1036,9 @@ HeartbeatData* MQClientFactory::prepareHeartbeatData()
 
 	// Producer
 	{
+		//add by lin.qiongshan, 2016年8月30日, m_producerTable 操作应该加锁
+		kpr::ScopedLock<kpr::Mutex> lock(m_producerTableLock);
+
 		std::map<std::string, MQProducerInner*>::iterator it = m_producerTable.begin();
 
 		for (; it!=m_producerTable.end(); it++)
@@ -903,7 +1065,8 @@ void MQClientFactory::makesureInstanceNameIsOnly(const std::string& instanceName
 
 void MQClientFactory::fetchNameServerAddr()
 {
-	if (m_clientConfig.getNamesrvAddr().empty())
+	//mdy by lin.qs, 定时查询并更新 nameserver 地址，不应该加非空判断；否则地址获取成功一次后一直非空，就无法动态更新 nameserver 地址了
+	//if (m_clientConfig.getNamesrvAddr().empty())
 	{
 		//1000 * 10, 1000 * 60 * 2
 		try
@@ -918,7 +1081,7 @@ void MQClientFactory::fetchNameServerAddr()
 
 void MQClientFactory::updateTopicRouteInfoFromNameServerTask()
 {
-	//10, m_clientConfig.getPollNameServerInterval()
+	//10, m_clientConfig.getPollNameServerInteval()
 	try
 	{
 		updateTopicRouteInfoFromNameServer();
@@ -946,12 +1109,14 @@ void MQClientFactory::cleanBroker()
 void MQClientFactory::persistAllConsumerOffsetTask()
 {
 	//1000 * 10, m_clientConfig.getPersistConsumerOffsetInterval()
-	try {
-		Logger::get_logger()->info("Begin to persist consumer offsets.");
+	try
+	{
+		MqLogDebug("prepare to persist consumer offset ...");
 		persistAllConsumerOffset();
-		Logger::get_logger()->info("All consumer offsets persisted.");
-	} catch (...) {
-		Logger::get_logger()->error("Failed to persist consumer offsets");
+	}
+	catch (...)
+	{
+
 	}
 }
 
@@ -987,7 +1152,7 @@ void MQClientFactory::startScheduledTask()
 	m_scheduledTaskIds[0] = m_timerTaskManager.RegisterTimer(1000 * 10, 1000 * 60 * 2,m_pFetchNameServerAddr);
 
 	// 定时从Name Server获取Topic路由信息
-	m_scheduledTaskIds[1] = m_timerTaskManager.RegisterTimer(10, m_clientConfig.getPollNameServerInterval(), m_pUpdateTopicRouteInfoFromNameServerTask);
+	m_scheduledTaskIds[1] = m_timerTaskManager.RegisterTimer(10, m_clientConfig.getPollNameServerInteval(),m_pUpdateTopicRouteInfoFromNameServerTask);
 
 	// 定时清理下线的Broker
 	// 向所有Broker发送心跳信息（包含订阅关系等）
@@ -1003,18 +1168,13 @@ void MQClientFactory::startScheduledTask()
 
 void MQClientFactory::cleanOfflineBroker()
 {
+    /* modified by yu.guangjie at 2015-11-04, reason: */
+    kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
+    
+	std::map<std::string, std::map<int, std::string> >::iterator it = m_brokerAddrTable.begin();
 	std::map<std::string, std::map<int, std::string> > updatedTable;
-	std::map<std::string, std::map<int, std::string> > tmpTable;
-	
-	{
-		kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
-		tmpTable = m_brokerAddrTable;
-	}
 
-	std::map<std::string, std::map<int, std::string> >::iterator it = tmpTable.begin();
-
-
-	for (; it!=tmpTable.end(); it++)
+	for (; it!=m_brokerAddrTable.end(); it++)
 	{
 		std::map<int, std::string> cloneTable = it->second;
 
@@ -1040,11 +1200,8 @@ void MQClientFactory::cleanOfflineBroker()
 		}
 	}
 
-	{
-		kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
-		m_brokerAddrTable.clear();
-		m_brokerAddrTable = updatedTable;
-	}
+	m_brokerAddrTable.clear();
+	m_brokerAddrTable = updatedTable;
 }
 
 bool MQClientFactory::isBrokerAddrExistInTopicRouteTable(const std::string& addr)
@@ -1075,6 +1232,9 @@ bool MQClientFactory::isBrokerAddrExistInTopicRouteTable(const std::string& addr
 
 void MQClientFactory::recordSnapshotPeriodically()
 {
+	//add by lin.qiongshan, 2016年8月30日, m_consumerTable 操作应该加锁
+	kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+
 	std::map<std::string, MQConsumerInner*>::iterator it = m_consumerTable.begin();
 
 	for (; it!=m_consumerTable.end(); it++)
@@ -1093,6 +1253,9 @@ void MQClientFactory::recordSnapshotPeriodically()
 
 void MQClientFactory::logStatsPeriodically()
 {
+	//add by lin.qiongshan, 2016年8月30日, m_consumerTable 操作应该加锁
+	kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+
 	std::map<std::string, MQConsumerInner*>::iterator it = m_consumerTable.begin();
 
 	for (; it!=m_consumerTable.end(); it++)
@@ -1112,6 +1275,9 @@ void MQClientFactory::logStatsPeriodically()
 
 void MQClientFactory::persistAllConsumerOffset()
 {
+	//add by lin.qiongshan, 2016年8月30日, m_consumerTable 操作应该加锁
+	kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+
 	std::map<std::string, MQConsumerInner*>::iterator it = m_consumerTable.begin();
 
 	for (; it!=m_consumerTable.end(); it++)
@@ -1141,8 +1307,14 @@ bool MQClientFactory::topicRouteDataIsChange(TopicRouteData& olddata, TopicRoute
 bool MQClientFactory::isNeedUpdateTopicRouteInfo(const std::string& topic)
 {
 	bool result = false;
+    
+    /* modified by yu.guangjie at 2015-08-14, reason: use result*/
+    
 	// 查看发布队列是否需要更新
 	{
+		//add by lin.qiongshan, 2016年8月30日, m_producerTable 操作应该加锁
+		kpr::ScopedLock<kpr::Mutex> lock(m_producerTableLock);
+
 		std::map<std::string, MQProducerInner*>::iterator it = m_producerTable.begin();
 
 		for (; it!=m_producerTable.end(); it++)
@@ -1150,13 +1322,16 @@ bool MQClientFactory::isNeedUpdateTopicRouteInfo(const std::string& topic)
 			MQProducerInner* inner = it->second;
 			if (inner)
 			{
-				inner->isPublishTopicNeedUpdate(topic);
+				result = inner->isPublishTopicNeedUpdate(topic);
 			}
 		}
 	}
 
 	// 查看订阅队列是否需要更新
 	{
+		//add by lin.qiongshan, 2016年8月30日, m_consumerTable 操作应该加锁
+		kpr::ScopedLock<kpr::Mutex> lock(m_consumerTableLock);
+
 		std::map<std::string, MQConsumerInner*>::iterator it = m_consumerTable.begin();
 
 		for (; it!=m_consumerTable.end(); it++)
@@ -1164,7 +1339,7 @@ bool MQClientFactory::isNeedUpdateTopicRouteInfo(const std::string& topic)
 			MQConsumerInner* inner = it->second;
 			if (inner)
 			{
-				inner->isSubscribeTopicNeedUpdate(topic);
+				result = inner->isSubscribeTopicNeedUpdate(topic);
 			}
 		}
 	}
@@ -1200,24 +1375,22 @@ void MQClientFactory::unregisterClientWithLock(const std::string& producerGroup,
 
 void MQClientFactory::unregisterClient(const std::string& producerGroup, const std::string& consumerGroup)
 {
-	std::vector<std::map<int, std::string> > addrlist;
+    MqLogNotice("unregister[producerGroup:%s , consumerGroup: %s]", 
+        producerGroup.c_str(), consumerGroup.c_str());
+
+    /* modified by yu.guangjie at 2015-11-04, reason: */
+    std::map<std::string, std::map<int, std::string> > tmpBroker;
+    {        
+        kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
+        tmpBroker = m_brokerAddrTable;
+    }
+	std::map<std::string, std::map<int, std::string> >::iterator it = tmpBroker.begin();
+
+	for (; it!=tmpBroker.end(); it++)
 	{
-		kpr::ScopedLock<kpr::Mutex> lock(m_brokerAddrTableLock);
-		std::map<std::string, std::map<int, std::string> >::iterator it = m_brokerAddrTable.begin();
+		std::map<int, std::string>::iterator it1 = it->second.begin();
 
-		for (; it!=m_brokerAddrTable.end(); it++)
-		{
-			addrlist.push_back(it->second);
-		}
-	}
-
-	std::vector<std::map<int, std::string> >::iterator it = addrlist.begin();
-
-	for (; it!=addrlist.end(); it++)
-	{
-		std::map<int, std::string>::iterator it1 = (*it).begin();
-
-		for (; it1!=(*it).end();it1++)
+		for (; it1!=it->second.end();it1++)
 		{
 			std::string& addr = it1->second;
 
@@ -1226,7 +1399,8 @@ void MQClientFactory::unregisterClient(const std::string& producerGroup, const s
 				try
 				{
 					m_pMQClientAPIImpl->unregisterClient(addr, m_clientId, producerGroup,
-														 consumerGroup, 3000);
+														 //consumerGroup, 3000);	mdy by lin.qiongshan, 2016-9-2，TCP 操作超时配置化
+														consumerGroup, getTcpTimeoutMilliseconds());
 				}
 				catch (...)
 				{

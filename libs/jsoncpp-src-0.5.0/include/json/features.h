@@ -3,7 +3,8 @@
 
 # include "forwards.h"
 
-namespace Json {
+/* modified by yu.guangjie at 2015-10-14, reason: change Json to MQJson*/
+namespace MQJson {
 
    /** \brief Configuration passed to reader and writer.
     * This configuration object can be used to force the Reader or Writer

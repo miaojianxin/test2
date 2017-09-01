@@ -54,22 +54,30 @@ namespace kpr
 			}
 
 			unsigned long long checkEndTime = GetCurrentTimeMillis();
-			int sleepTime = m_checkInterval - (int)(checkEndTime -currentCheckTime);
+			
+            /* modified by yu.guangjie at 2015-08-27, reason: */
+			int sleepTime = m_checkInterval + currentCheckTime - checkEndTime;
+            
+            lastCheckTime = currentCheckTime;
 			if (sleepTime < 0)
 			{
 				sleepTime = 0;
 			}
-
-			lastCheckTime = currentCheckTime;
-
-			try
-			{
-				kpr::ScopedLock<kpr::Monitor> lock(*this);
-				Wait(sleepTime);
-			}
-			catch (...)
-			{
-			}
+            else
+            {
+                if(sleepTime > m_checkInterval)
+                {
+                    sleepTime = m_checkInterval;
+                }
+                try
+    			{
+    				kpr::ScopedLock<kpr::Monitor> lock(*this);
+    				Wait(sleepTime);
+    			}
+    			catch (...)
+    			{
+    			}
+            }			
 		}
 	}
 
@@ -88,11 +96,12 @@ namespace kpr
 		info.pTimerHandler = pHandler;
 		info.persistent = persistent;
 
-		kpr::ScopedLock<kpr::Mutex> lock(m_mutex); 
-
-		info.id = GetNextTimerID();
-
-		m_timers[info.id] = info;
+        {
+            kpr::ScopedLock<kpr::Mutex> lock(m_mutex); 
+    		info.id = GetNextTimerID();
+    		m_timers[info.id] = info;
+        }
+		
 
 		return info.id;
 	}

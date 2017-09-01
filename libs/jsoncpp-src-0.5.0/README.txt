@@ -109,8 +109,8 @@ Below is a short description of the content of each file:
 - test_complex_01.actual: flattened JSON element tree produced by 
     jsontest.exe from reading test_complex_01.json
 - test_complex_01.rewrite: JSON document written by jsontest.exe using the
-    Json::Value parsed from test_complex_01.json and serialized using
-    Json::StyledWritter.
+    MQJson::Value parsed from test_complex_01.json and serialized using
+    MQJson::StyledWritter.
 - test_complex_01.actual-rewrite: flattened JSON element tree produced by 
     jsontest.exe from reading test_complex_01.rewrite.
 test_complex_01.process-output: jsontest.exe output, typically useful to

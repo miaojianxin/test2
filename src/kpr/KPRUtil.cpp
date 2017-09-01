@@ -15,11 +15,19 @@
  */
 #include "KPRUtil.h"
 
+#include <assert.h>
+
 unsigned long long GetCurrentTimeMillis()
 {
-	std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-    auto duration = now.time_since_epoch();
-	return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+#ifdef WIN32
+	timeb tb;
+	ftime(&tb);
+	return tb.time * 1000ULL + tb.millitm;
+#else
+	struct timeval tv;
+	gettimeofday(&tv, 0);
+	return tv.tv_sec * 1000ULL+tv.tv_usec/1000;
+#endif
 }
 
 #ifndef WIN32
@@ -45,6 +53,9 @@ struct timespec CalcAbsTime(long timeout)
 
 long long str2ll( const char *str )
 {
-    std::string s(str);
-    return std::stoll(s);
+#ifdef WIN32
+	return _atoi64(str);
+#else
+	return atoll(str);
+#endif
 }

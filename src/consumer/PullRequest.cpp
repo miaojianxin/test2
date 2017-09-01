@@ -19,7 +19,16 @@
 
 PullRequest::~PullRequest()
 {
-
+    if(m_pMessageQueue != NULL)
+    {
+        delete m_pMessageQueue;
+        m_pMessageQueue = NULL;
+    }
+    if(m_pProcessQueue != NULL)
+    {
+        delete m_pProcessQueue;
+        m_pProcessQueue = NULL;
+    }
 }
 
 std::string PullRequest::getConsumerGroup()
@@ -50,17 +59,6 @@ long long PullRequest::getNextOffset()
 void PullRequest::setNextOffset(long long nextOffset)
 {
 	m_nextOffset = nextOffset;
-}
-
-
-std::string PullRequest::toString() {
-	std::string s;
-	s.append("{")
-			.append("ConsumerGroup:").append(m_consumerGroup)
-			.append(", ").append("MessageQueue: ").append(m_pMessageQueue->toString())
-			.append(", NextOffset: ").append(std::to_string(m_nextOffset))
-	 .append("}");
-	return s;
 }
 
 int PullRequest::hashCode()

@@ -23,6 +23,7 @@
 #include "MixAll.h"
 #include "KPRUtil.h"
 #include "OffsetStore.h"
+#include "UtilAll.h"
 
 ConsumeMessageConcurrentlyService::ConsumeMessageConcurrentlyService(
 	DefaultMQPushConsumerImpl* pDefaultMQPushConsumerImpl,
@@ -39,6 +40,8 @@ ConsumeMessageConcurrentlyService::ConsumeMessageConcurrentlyService(
 
 void ConsumeMessageConcurrentlyService::start()
 {
+    MqLogNotice("Consume concurrently service start.");
+    
 	m_scheduledExecutorService->Start();
 }
 
@@ -74,13 +77,13 @@ bool ConsumeMessageConcurrentlyService::sendMessageBack(MessageExt& msg,
 class SubmitConsumeRequestLater : public kpr::TimerHandler
 {
 public:
-	SubmitConsumeRequestLater(std::list<MessageExt*>& msgs,
+	SubmitConsumeRequestLater(std::list<MessageExt*>* pMsgs,
 		ProcessQueue* pProcessQueue,
-		MessageQueue messageQueue,
+		MessageQueue* pMessageQueue,
 		ConsumeMessageConcurrentlyService* pService)
-		:m_msgs(msgs),
+		:m_pMsgs(pMsgs),
 		m_pProcessQueue(pProcessQueue),
-		m_messageQueue(messageQueue),
+		m_pMessageQueue(pMessageQueue),
 		m_pService(pService)
 	{
 
@@ -88,61 +91,57 @@ public:
 
 	void OnTimeOut(unsigned int timerID)
 	{
-		m_pService->submitConsumeRequest(m_msgs,m_pProcessQueue,m_messageQueue,true);
+		m_pService->submitConsumeRequest(m_pMsgs,m_pProcessQueue,m_pMessageQueue,true);
 
 		delete this;
 	}
 
 private:
-	std::list<MessageExt*> m_msgs;
+	std::list<MessageExt*>* m_pMsgs;
 	ProcessQueue* m_pProcessQueue;
-	MessageQueue m_messageQueue;
+	MessageQueue* m_pMessageQueue;
 	ConsumeMessageConcurrentlyService* m_pService;
 };
 
-void ConsumeMessageConcurrentlyService::submitConsumeRequestLater(std::list<MessageExt*>& msgs,
+void ConsumeMessageConcurrentlyService::submitConsumeRequestLater(std::list<MessageExt*>* pMsgs,
 																	ProcessQueue* pProcessQueue,
-																	MessageQueue& messageQueue)
+																	MessageQueue* pMessageQueue)
 {
-	SubmitConsumeRequestLater* sc = new SubmitConsumeRequestLater(msgs, pProcessQueue, messageQueue,this);
+	SubmitConsumeRequestLater* sc = new SubmitConsumeRequestLater(pMsgs, pProcessQueue, pMessageQueue,this);
 
 	m_scheduledExecutorService->RegisterTimer(0,5000,sc,false);
 }
 
-void ConsumeMessageConcurrentlyService::submitConsumeRequest(std::list<MessageExt*>& msgs,
+void ConsumeMessageConcurrentlyService::submitConsumeRequest(std::list<MessageExt*>* pMsgs,
 																ProcessQueue* pProcessQueue,
-																MessageQueue& messageQueue,
+																MessageQueue* pMessageQueue,
 																bool dispathToConsume)
 {
 	size_t consumeBatchSize = m_pDefaultMQPushConsumer->getConsumeMessageBatchMaxSize();
 
-	if (msgs.size() <= consumeBatchSize)
+    /* modified by yu.guangjie at 2015-08-16, reason: */
+    std::list<MessageExt*>::iterator it = pMsgs->begin();
+	for(; it != pMsgs->end(); )
 	{
-		ConsumeConcurrentlyRequest* consumeRequest = new ConsumeConcurrentlyRequest(msgs, pProcessQueue, messageQueue,this);
+		std::list<MessageExt*>* msgThis = new std::list<MessageExt*>();
+		for (size_t i = 0; i < consumeBatchSize; i++, it++)
+		{
+			if (it != pMsgs->end())
+			{
+				msgThis->push_back(*it);
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		ConsumeConcurrentlyRequest* consumeRequest = new ConsumeConcurrentlyRequest(msgThis, pProcessQueue, pMessageQueue,this);
 		m_pConsumeExecutor->AddWork(consumeRequest);
 	}
-	else
-	{
-		std::list<MessageExt*>::iterator it = msgs.begin();
-		for(; it != msgs.end(); )
-		{
-			std::list<MessageExt*> msgThis;
-			for (size_t i = 0; i < consumeBatchSize; i++, it++)
-			{
-				if (it != msgs.end())
-				{
-					msgThis.push_back(*it);
-				}
-				else
-				{
-					break;
-				}
-			}
+    // clear the msgs
+    pMsgs->clear();
 
-			ConsumeConcurrentlyRequest* consumeRequest = new ConsumeConcurrentlyRequest(msgThis, pProcessQueue, messageQueue,this);
-			m_pConsumeExecutor->AddWork(consumeRequest);
-		}
-	}
 }
 
 void ConsumeMessageConcurrentlyService::updateCorePoolSize(int corePoolSize)
@@ -155,12 +154,12 @@ void ConsumeMessageConcurrentlyService::processConsumeResult( ConsumeConcurrentl
 {
 	int ackIndex = context.ackIndex;
 
-	if (consumeRequest.getMsgs().empty())
+	if (consumeRequest.getMsgs()->empty())
 	{
 		return;
 	}
 
-	int msgsSize = consumeRequest.getMsgs().size();
+	int msgsSize = consumeRequest.getMsgs()->size();
 
 	switch (status)
 	{
@@ -188,11 +187,11 @@ void ConsumeMessageConcurrentlyService::processConsumeResult( ConsumeConcurrentl
 		break;
 	}
 
-	std::list<MessageExt*>& msgs = consumeRequest.getMsgs();
-	std::list<MessageExt*>::iterator it = msgs.begin();
+	std::list<MessageExt*>* msgs = consumeRequest.getMsgs();
+	std::list<MessageExt*>::iterator it = msgs->begin();
 
 	//跳过已经消费的消息
-	for (int i = 0;i< ackIndex + 1 && it != msgs.end(); i++)
+	for (int i = 0;i< ackIndex + 1 && it != msgs->end(); i++)
 	{
 		it++;
 	}
@@ -203,42 +202,43 @@ void ConsumeMessageConcurrentlyService::processConsumeResult( ConsumeConcurrentl
 		// 如果是广播模式，直接丢弃失败消息，需要在文档中告知用户
 		// 这样做的原因：广播模式对于失败重试代价过高，对整个集群性能会有较大影响，失败重试功能交由应用处理
 
-		for (; it != msgs.end(); it++)
+		for (; it != msgs->end(); it++)
 		{
-			Logger::get_logger()->warn("BROADCASTING, the message consume failed, drop it, MsgId: {}", (*it)->getMsgId());
+			//MessageExt msg = consumeRequest.getMsgs().get(i);
+			// log.warn("BROADCASTING, the message consume failed, drop it, {}", msg.toString());
 		}
 		break;
 	case CLUSTERING:
 		{
 			// 处理消费失败的消息，直接发回到Broker
-			std::list<MessageExt*> msgBackFailed;
+			std::list<MessageExt*>* msgBackFailed = new std::list<MessageExt*>();
 
-			for (; it != msgs.end(); it++)
+			for (; it != msgs->end(); it++)
 			{
 				MessageExt* msg = *it;
 				bool result = sendMessageBack(*msg, context);
 				if (!result)
 				{
 					msg->setReconsumeTimes(msg->getReconsumeTimes() + 1);
-					msgBackFailed.push_back(msg);
+					msgBackFailed->push_back(msg);
 				}
 			}
 
-			if (!msgBackFailed.empty())
+			if (!msgBackFailed->empty())
 			{
 				// 发回失败的消息仍然要保留
 				// 删除consumeRequest中发送失败的消息
-				it = msgs.begin();
+				it = msgs->begin();
 
-				for (; it != msgs.end();)
+				for (; it != msgs->end();)
 				{
 					bool find = false;
-					std::list<MessageExt*>::iterator itFailed = msgBackFailed.begin();
-					for (; itFailed != msgBackFailed.end(); itFailed++)
+					std::list<MessageExt*>::iterator itFailed = msgBackFailed->begin();
+					for (; itFailed != msgBackFailed->end(); itFailed++)
 					{
 						if (*it == *itFailed)
 						{
-							it = msgs.erase(it);
+							it = msgs->erase(it);
 							find = true;
 							break;
 						}
@@ -250,10 +250,15 @@ void ConsumeMessageConcurrentlyService::processConsumeResult( ConsumeConcurrentl
 					}
 				}
 
-				MessageQueue messageQueue = consumeRequest.getMessageQueue();
 				// 此过程处理失败的消息，需要在Client中做定时消费，直到成功
-				submitConsumeRequestLater(msgBackFailed, consumeRequest.getProcessQueue(), messageQueue);
+				submitConsumeRequestLater(msgBackFailed, consumeRequest.getProcessQueue(),
+					consumeRequest.getMessageQueue());
 			}
+            else
+            {
+                /* modified by yu.guangjie at 2015-08-20, reason: delete msgBackFailed */
+                delete msgBackFailed;
+            }
 		}
 	
 		break;
@@ -261,11 +266,11 @@ void ConsumeMessageConcurrentlyService::processConsumeResult( ConsumeConcurrentl
 		break;
 	}
 
-	long long offset = consumeRequest.getProcessQueue()->removeMessage(consumeRequest.getMsgs());
+	long long offset = consumeRequest.getProcessQueue()->removeMessage(*consumeRequest.getMsgs());
 	if (offset >= 0)
 	{
-        MessageQueue messageQueue = consumeRequest.getMessageQueue();
-		m_pDefaultMQPushConsumerImpl->getOffsetStore()->updateOffset(messageQueue, offset, true);
+		m_pDefaultMQPushConsumerImpl->getOffsetStore()->updateOffset(*consumeRequest.getMessageQueue(),
+			offset, true);
 	}
 }
 
@@ -284,33 +289,50 @@ DefaultMQPushConsumerImpl* ConsumeMessageConcurrentlyService::getDefaultMQPushCo
 	return m_pDefaultMQPushConsumerImpl;
 }
 
-ConsumeConcurrentlyRequest::ConsumeConcurrentlyRequest(std::list<MessageExt*>& msgs,
+ConsumeConcurrentlyRequest::ConsumeConcurrentlyRequest(std::list<MessageExt*>* pMsgs,
 	ProcessQueue* pProcessQueue,
-	MessageQueue& messageQueue,
+	MessageQueue* pMessageQueue,
 	ConsumeMessageConcurrentlyService* pService)
-	:m_msgs(msgs),
+	:m_pMsgs(pMsgs),
 	m_pProcessQueue(pProcessQueue),
+	m_pMessageQueue(pMessageQueue),
 	m_pService(pService)
 {
-	m_messageQueue = messageQueue;
+
 }
 
 ConsumeConcurrentlyRequest::~ConsumeConcurrentlyRequest()
 {
-
+    if(m_pMsgs != NULL)
+    {
+        /* modified by yu.guangjie at 2015-08-20, reason: delete MessageExt* */
+        std::list<MessageExt*>::iterator it = m_pMsgs->begin();
+        for (; it!= m_pMsgs->end(); it++)
+        {
+        	delete *it;
+        }
+        delete m_pMsgs;
+    }
 }
 
 void ConsumeConcurrentlyRequest::Do()
 {
-	if (m_pProcessQueue->isDropped())
+	if (m_pProcessQueue->isDroped())
 	{
-		//TODO "the message queue not be able to consume, because it's droped {}",
+		MqLogWarn("the message queue(%s.%d:%s) not be able to consume, because it's droped",
+            m_pMessageQueue->getBrokerName().c_str(),
+            m_pMessageQueue->getQueueId(),
+            m_pMessageQueue->getTopic().c_str());
+
+        /* modified by yu.guangjie at 2015-08-20, reason: remove msg */
+        m_pProcessQueue->removeMessage(*m_pMsgs);        
 		delete this;
+        
 		return;
 	}
 
 	MessageListenerConcurrently* listener = m_pService->getMessageListener();
-	ConsumeConcurrentlyContext context(m_messageQueue);
+	ConsumeConcurrentlyContext context(*m_pMessageQueue);
 	ConsumeConcurrentlyStatus status = RECONSUME_LATER;
 
 	// 执行Hook
@@ -318,8 +340,8 @@ void ConsumeConcurrentlyRequest::Do()
 	if (m_pService->getDefaultMQPushConsumerImpl()->hasHook())
 	{
 		consumeMessageContext.consumerGroup = m_pService->getConsumerGroup();
-		consumeMessageContext.mq = m_messageQueue;
-		consumeMessageContext.msgList = m_msgs;
+		consumeMessageContext.mq = *m_pMessageQueue;
+		consumeMessageContext.msgList = *m_pMsgs;
 		consumeMessageContext.success = false;
 		m_pService->getDefaultMQPushConsumerImpl()->executeHookBefore(consumeMessageContext);
 	}
@@ -328,15 +350,15 @@ void ConsumeConcurrentlyRequest::Do()
 
 	try
 	{
-		resetRetryTopic(m_msgs);
-		status = listener->consumeMessage(m_msgs, context);
+		resetRetryTopic(m_pMsgs);
+		status = listener->consumeMessage(*m_pMsgs, context);
 	}
 	catch (...)
 	{
-		//TODO "consumeMessage exception: {} Group: {} Msgs: {} MQ: {}"
+		// "consumeMessage exception: {} Group: {} Msgs: {} MQ: {}"
 	}
 
-	long long consumeRT = GetCurrentTimeMillis() - beginTimestamp;
+	long consumeRT = long(GetCurrentTimeMillis() - beginTimestamp);
 
 	// 执行Hook
 	if (m_pService->getDefaultMQPushConsumerImpl()->hasHook())
@@ -351,7 +373,9 @@ void ConsumeConcurrentlyRequest::Do()
 	// 耗时最大值新记录
 	if (updated)
 	{
-		//TODO "consumeMessage RT new max: {} Group: {} Msgs: {} MQ: {}"
+	    MqLogWarn("consumeMessage RT new max: {%ldms}, MQ: {topic=%s, broker=%s, queue=%d}",
+            consumeRT, m_pMessageQueue->getTopic().c_str(),
+            m_pMessageQueue->getBrokerName().c_str(), m_pMessageQueue->getQueueId());
 	}
 
 	m_pService->processConsumeResult(status, context, *this);
@@ -359,12 +383,12 @@ void ConsumeConcurrentlyRequest::Do()
 	delete this;
 }
 
-void ConsumeConcurrentlyRequest::resetRetryTopic( std::list<MessageExt*>& msgs )
+void ConsumeConcurrentlyRequest::resetRetryTopic( std::list<MessageExt*>* pMsgs )
 {
 	std::string groupTopic = MixAll::getRetryTopic(m_pService->getConsumerGroup());
-	std::list<MessageExt*>::iterator it = msgs.begin();
+	std::list<MessageExt*>::iterator it = pMsgs->begin();
 
-	for (;it != msgs.end();it++)
+	for (;it != pMsgs->end();it++)
 	{
 		MessageExt* msg = (*it);
 		std::string retryTopic = msg->getProperty(Message::PROPERTY_RETRY_TOPIC);

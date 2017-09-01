@@ -26,7 +26,8 @@ enum PullStatus
 	FOUND,//找到消息
 	NO_NEW_MSG,//没有新的消息可以被拉取
 	NO_MATCHED_MSG,//经过过滤后，没有匹配的消息
-	OFFSET_ILLEGAL//Offset不合法，可能过大或者过小
+	OFFSET_ILLEGAL,//Offset不合法，可能过大或者过小
+	BROKER_TIMEOUT //indicate pull request timeout or received NULL response
 };
 
 /**
@@ -63,6 +64,19 @@ struct ROCKETMQCLIENT_API PullResult
 			delete *it;
 		}
 	}
+
+    long long getNextBeginOffset()
+    {
+        return nextBeginOffset;
+    }
+    std::list<MessageExt*> &getMsgFoundList()
+    {
+        return msgFoundList;
+    }
+    PullStatus getPullStatus()
+    {
+        return pullStatus;
+    }
 
 	PullStatus pullStatus;
 	long long nextBeginOffset;

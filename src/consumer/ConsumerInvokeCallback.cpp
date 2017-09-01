@@ -16,76 +16,65 @@
 
 #include "ConsumerInvokeCallback.h"
 #include "ResponseFuture.h"
-#include "PullResult.h"
-#include "MQClientAPIImpl.h"
 #include "PullCallback.h"
+#include "MQClientAPIImpl.h"
 #include "MQClientException.h"
 #include "RemotingCommand.h"
 
-ConsumerInvokeCallback::ConsumerInvokeCallback(PullCallback* pPullCallback,MQClientAPIImpl* pMQClientAPIImpl)
+ConsumerInvokeCallback::ConsumerInvokeCallback(PullCallback* pPullCallback, 
+    MQClientAPIImpl* pClientAPIImpl)
 	:m_pPullCallback(pPullCallback),
-	m_pMQClientAPIImpl(pMQClientAPIImpl)
+	m_pClientAPIImpl(pClientAPIImpl)
 {
 }
 
 ConsumerInvokeCallback::~ConsumerInvokeCallback()
 {
+    /* modified by yu.guangjie at 2015-08-16, reason: delete callback*/
+    if(m_pPullCallback != NULL)
+    {
+        delete m_pPullCallback;
+        m_pPullCallback = NULL;
+    }
 }
 
 void ConsumerInvokeCallback::operationComplete(ResponseFuture* pResponseFuture)
 {
-	if (m_pPullCallback==NULL)
-	{
-		delete this;
-		return;
-	}
+    /* modified by yu.guangjie at 2015-08-16, reason: consumer callback*/
+    RemotingCommand *response = pResponseFuture->getResponseCommand();
+    if (response != NULL) 
+    {
+        try {
+            PullResult *pullResult = m_pClientAPIImpl->processPullResponse(response);
+            m_pPullCallback->onSuccess(*pullResult);
 
-	RemotingCommand* response = pResponseFuture->getResponseCommand();
-	if (response != NULL)
-	{
-		try
-		{
-			PullResult* pullResult = m_pMQClientAPIImpl->processPullResponse(response);
-			response->SetBody(NULL,0,false);
+            /* modified by yu.guangjie at 2015-08-28, reason: delete response */
+            response->SetBody(NULL, 0, false);
+            delete response;
+            
+            delete pullResult;
+        }
+        catch (MQException e) {
+            m_pPullCallback->onException(e);
+        }
+    }
+    else 
+    {
+        if (!pResponseFuture->isSendRequestOK()) 
+        {
+            MQException e = MQEXCEPTION(MQException, "send request failed", -1);
+            m_pPullCallback->onException(e);
+        }
+        else if (pResponseFuture->isTimeout()) 
+        {
+            MQException e = MQEXCEPTION(MQException, "wait response timeout", -2);
+            m_pPullCallback->onException(e);
+        }
+        else 
+        {
+            MQException e = MQEXCEPTION(MQException, "unknow reseaon", -3);
+            m_pPullCallback->onException(e);
+        }
+    }
 
-			m_pPullCallback->onSuccess(*pullResult);
-
-			// 因为消息放到消费队列消费，而在删除pullResult时会删除消息
-			// 所以这里清空消息列表
-			pullResult->msgFoundList.clear();
-			delete pullResult;
-		}
-		catch (MQException& e)
-		{
-			m_pPullCallback->onException(e);
-		}
-
-		delete response;
-	}
-	else
-	{
-		if (!pResponseFuture->isSendRequestOK())
-		{
-			//"send request failed", responseFuture	.getCause()
-			std::string msg = "send request failed";
-			MQClientException e(msg,-1,__FILE__,__LINE__);
-			m_pPullCallback->onException(e);
-		}
-		else if (pResponseFuture->isTimeout())
-		{
-			//wait response timeout "+ responseFuture.getTimeoutMillis() + "ms", responseFuture.getCause()
-			std::string msg = "wait response timeout";
-			MQClientException e(msg,-1,__FILE__,__LINE__);
-			m_pPullCallback->onException(e);
-		}
-		else
-		{
-			// "unknow reseaon", responseFuture	.getCause()
-			std::string msg = "unknow reseaon";
-			MQClientException e(msg,-1,__FILE__,__LINE__);
-			m_pPullCallback->onException(e);
-		}
-	}
-
-	delete this;
 }

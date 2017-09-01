@@ -17,6 +17,7 @@
 #define __OFFSETSTORE_H__
 
 #include <set>
+#include <string>
 #include "RocketMQClient.h"
 
 class MessageQueue;
@@ -65,6 +66,7 @@ public:
 	* 删除不必要的MessageQueue offset
 	*/
 	virtual void removeOffset(MessageQueue& mq)=0;
+	virtual long long ReadOffsetByGroup(const MessageQueue& mq,std::string strGroupName){return 0;};
 };
 
 #endif

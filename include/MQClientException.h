@@ -32,8 +32,8 @@ public:
 		try
 		{
 			std::stringstream ss;
-			ss << "msg: " << msg <<"error:"<<error
-				<< "in file <" << file << "> line:" <<line;
+			ss << "msg: " << msg <<" error:"<<error
+				<< " in file <" << file << "> line:" <<line;
 			m_msg = ss.str();
 		}
 		catch (...)
@@ -92,5 +92,7 @@ DEFINE_MQCLIENTEXCEPTION(RemotingException)
 DEFINE_MQCLIENTEXCEPTION(UnknownHostException)
 
 #define THROW_MQEXCEPTION(e,msg,err) throw e(msg,err,__FILE__,__LINE__)
+
+#define MQEXCEPTION(e,msg,err)  e(msg,err,__FILE__,__LINE__)
 
 #endif

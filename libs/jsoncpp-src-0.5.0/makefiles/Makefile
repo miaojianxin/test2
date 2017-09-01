@@ -31,7 +31,7 @@ INCLUDEPATH :=  -I$(TOPDIR)/include $(addprefix -I ,$(DIRS))
 
 CC := g++
 AR := ar
-CFLAGS := -g -fPIC -Wno-deprecated -O2 -mtune=generic $(ARCH) $(OUTTYPE)
+CFLAGS := -g -fPIC -Wno-deprecated -O2  $(ARCH) $(OUTTYPE)
 LDFLAGS := -fPIC
 CXXFLAGS := $(CFLAGS) $(INCLUDEPATH)
 
@@ -47,7 +47,7 @@ cpfile:
 build:$(OUT)
 rebuild:clean build
 clean:
-	$(RM) $(OBJDIR)/$(OBJS) $(OUTDIR)/$(OUT)
+	$(RM) $(OBJDIR)/$(OBJS) $(OUTDIR)/$(OUT) ../../jsoncpp/lib/$(OUT)
 echoo:
 #	echo $(SOURCE)
 	@echo $(OBJS)

@@ -46,9 +46,10 @@ const std::string&  SendResult::getMsgId()
 	return m_msgId;
 }
 
+//mjx test modify
 void SendResult::setMsgId(const std::string&  msgId)
 {
-	m_msgId = m_msgId;
+	m_msgId = msgId;
 }
 
 SendStatus SendResult::getSendStatus()
@@ -76,9 +77,10 @@ long long SendResult::getQueueOffset()
 	return m_queueOffset;
 }
 
+//mjx test modify
 void SendResult::setQueueOffset(long long queueOffset)
 {
-	m_queueOffset = m_queueOffset;
+	m_queueOffset = queueOffset;
 }
 
 

@@ -45,6 +45,18 @@ long long RebalancePullImpl::computePullFromWhere(MessageQueue& mq)
 
 void RebalancePullImpl::dispatchPullRequest(std::list<PullRequest*>& pullRequestList)
 {
+	//mdy by lin.qs@2017-3-31， PullConsumer 这边设么都不做，但 PullRequest 指针对象应该要删除，外部没有其它地方删除
+	if (!pullRequestList.empty())
+	{
+		for (std::list<PullRequest*>::iterator itor = pullRequestList.begin();
+			itor != pullRequestList.end();
+			++itor)
+		{
+			delete (*itor);
+			(*itor) = NULL;
+		}
+		pullRequestList.clear();
+	}
 }
 
 void RebalancePullImpl::messageQueueChanged(const std::string& topic, 

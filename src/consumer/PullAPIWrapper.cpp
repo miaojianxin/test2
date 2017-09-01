@@ -33,6 +33,7 @@
 #include "PullResultExt.h"
 #include "MessageDecoder.h"
 #include "VirtualEnvUtil.h"
+#include "ScopedLock.h"
 
 PullAPIWrapper::PullAPIWrapper(MQClientFactory* pMQClientFactory, const std::string& consumerGroup)
 {
@@ -49,6 +50,7 @@ void  PullAPIWrapper::updatePullFromWhichNode(MessageQueue& mq, long brokerId)
 	}
 	else
 	{
+	    kpr::ScopedLock<kpr::Mutex> lock(m_whichMutex);
 		m_pullFromWhichNodeTable[mq]=AtomicLong(brokerId);
 	}
 }
@@ -62,7 +64,7 @@ PullResult* PullAPIWrapper::processPullResult(MessageQueue& mq,
 
 	updatePullFromWhichNode(mq, pullResultExt.suggestWhichBrokerId);
 
-	if (pullResult.pullStatus == FOUND)
+	if (pullResultExt.pullStatus == FOUND)
 	{
 		std::list<MessageExt*> msgList =
 			MessageDecoder::decodes(pullResultExt.messageBinary, pullResultExt.messageBinaryLen);
@@ -78,7 +80,7 @@ PullResult* PullAPIWrapper::processPullResult(MessageQueue& mq,
 				MessageExt* msg = *it;
 				if (!msg->getTags().empty())
 				{
-					std::set<std::string>& tags = subscriptionData.getTagsSet();
+					std::set<std::string>& tags = subscriptionData.m_tagsSet;
 					if (tags.find(msg->getTags())!=tags.end())
 					{
 						msgListFilterAgain.push_back(msg);
@@ -89,6 +91,11 @@ PullResult* PullAPIWrapper::processPullResult(MessageQueue& mq,
 						it++;
 					}
 				}
+                /* modified by yu.guangjie at 2015-08-27, reason: add else */
+                else
+                {
+                    it++;
+                }
 			}
 		}
 		else
@@ -112,11 +119,11 @@ PullResult* PullAPIWrapper::processPullResult(MessageQueue& mq,
 				// 消息中放入队列的最大最小Offset，方便应用来感知消息堆积程度
 
 				char tmp[32];
-				sprintf(tmp,"%lld",pullResult.minOffset);
+				sprintf(tmp,"%lld",pullResultExt.minOffset);
 
 				msg->putProperty(Message::PROPERTY_MIN_OFFSET, tmp);
 
-				sprintf(tmp,"%lld",pullResult.maxOffset);
+				sprintf(tmp,"%lld",pullResultExt.maxOffset);
 				msg->putProperty(Message::PROPERTY_MAX_OFFSET, tmp);
 			}
 		}
@@ -129,11 +136,11 @@ PullResult* PullAPIWrapper::processPullResult(MessageQueue& mq,
 				MessageExt* msg = *it;
 
 				char tmp[32];
-				sprintf(tmp,"%lld",pullResult.minOffset);
+				sprintf(tmp,"%lld",pullResultExt.minOffset);
 
 				msg->putProperty(Message::PROPERTY_MIN_OFFSET, tmp);
 
-				sprintf(tmp,"%lld",pullResult.maxOffset);
+				sprintf(tmp,"%lld",pullResultExt.maxOffset);
 				msg->putProperty(Message::PROPERTY_MAX_OFFSET, tmp);
 			}
 		}
@@ -187,7 +194,7 @@ PullResult* PullAPIWrapper::pullKernelImpl(MessageQueue& mq,
 		recalculatePullFromWhichNode(mq), false);
 	if (findBrokerResult.brokerAddr.empty()) 
 	{
-		// TODO 此处可能对Name Server压力过大，需要调优
+		// 此处可能对Name Server压力过大，需要调优
 		m_pMQClientFactory->updateTopicRouteInfoFromNameServer(mq.getTopic());
 		findBrokerResult = m_pMQClientFactory->findBrokerAddressInSubscribe(mq.getBrokerName(),
 			recalculatePullFromWhichNode(mq), false);

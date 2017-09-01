@@ -14,6 +14,7 @@
 * limitations under the License.
 */
 
+#include <stdio.h>
 #include "ProcessQueue.h"
 #include "MessageExt.h"
 #include "KPRUtil.h"
@@ -31,7 +32,7 @@ ProcessQueue::ProcessQueue()
 {
 	m_queueOffsetMax = 0L;
 	m_msgCount=0;
-	m_dropped = false;
+	m_droped = false;
 
 	m_locked = false;
 	m_lastLockTimestamp = GetCurrentTimeMillis();
@@ -101,21 +102,22 @@ long long ProcessQueue::getMaxSpan()
 long long ProcessQueue::removeMessage(const std::list<MessageExt*>& msgs)
 {
 	long long result = -1;
+    long long origin = -1;
 	try
 	{
 		kpr::ScopedLock<kpr::Mutex> lock(m_lockTreeMap);
 
 		if (!m_msgTreeMap.empty())
 		{
+            /* modified by yu.guangjie at 2015-08-29, reason: use origin */
+		    origin = m_msgTreeMap.begin()->first;
+            
 			result = m_queueOffsetMax+1;
 			std::list<MessageExt*>::const_iterator it = msgs.begin();
 			for (;it!=msgs.end();it++)
 			{
 				MessageExt* msg = (*it);
 				m_msgTreeMap.erase(msg->getQueueOffset());
-
-				//TODO delete message?
-				delete msg;
 			}
 
 			m_msgCount-=msgs.size();
@@ -124,11 +126,19 @@ long long ProcessQueue::removeMessage(const std::list<MessageExt*>& msgs)
 		if (!m_msgTreeMap.empty())
 		{
 			std::map<long long, MessageExt*>::iterator it = m_msgTreeMap.begin();
-			result = it->first;
+            if(origin != it->first)
+            {
+                result = it->first;
+            }
+            else
+            {   // needn't to update offset
+                result = -1;
+            }			
 		}
 	}
 	catch (...)
 	{
+	    printf("ProcessQueue::removeMessage() error!\n");
 	}
 
 	return result;
@@ -144,14 +154,14 @@ AtomicLong ProcessQueue::getMsgCount()
 	return m_msgCount;
 }
 
-bool ProcessQueue::isDropped()
+bool ProcessQueue::isDroped()
 {
-	return m_dropped;
+	return m_droped;
 }
 
-void ProcessQueue::setDropped(bool dropped)
+void ProcessQueue::setDroped(bool droped)
 {
-	m_dropped = dropped;
+	m_droped = droped;
 }
 
 /**
@@ -174,11 +184,17 @@ void ProcessQueue::rollback()
 	try
 	{
 		kpr::ScopedLock<kpr::Mutex> lock(m_lockTreeMap);
-		m_msgTreeMap = m_msgTreeMapTemp;
-		m_msgTreeMapTemp.clear();
+        /* modified by yu.guangjie at 2015-08-27, reason: rollback m_msgTreeMapTemp */
+        std::map<long long, MessageExt*>::iterator it = m_msgTreeMapTemp.begin();
+		for (; it != m_msgTreeMapTemp.end(); it++)
+		{
+			m_msgTreeMap[it->first] = it->second;
+		}
+        m_msgTreeMapTemp.clear();
 	}
 	catch (...)
 	{
+	    printf("ProcessQueue::rollback() error!\n");
 	}
 }
 
@@ -199,6 +215,7 @@ long long ProcessQueue::commit()
 	}
 	catch (...)
 	{
+	    printf("ProcessQueue::commit() error!\n");
 	}
 
 	return -1;
@@ -221,6 +238,7 @@ void ProcessQueue::makeMessageToCosumeAgain(const std::list<MessageExt*>& msgs)
 	}
 	catch (...)
 	{
+	    printf("ProcessQueue::makeMessageToCosumeAgain() error!\n");
 	}
 }
 
@@ -230,7 +248,7 @@ void ProcessQueue::makeMessageToCosumeAgain(const std::list<MessageExt*>& msgs)
 * @param batchSize
 * @return
 */
-std::list<MessageExt*> ProcessQueue::takeMessages(int batchSize)
+std::list<MessageExt*> ProcessQueue::takeMessags(int batchSize)
 {
 	std::list<MessageExt*> result;
 	try
@@ -257,6 +275,7 @@ std::list<MessageExt*> ProcessQueue::takeMessages(int batchSize)
 	}
 	catch (...)
 	{
+	    printf("ProcessQueue::takeMessags() error!\n");
 	}
 
 	if (result.empty())

@@ -20,39 +20,16 @@
 #include <string>
 #include <set>
 #include <map>
-#include <chrono>
 
 #include "MQConsumerInner.h"
 #include "MessageExt.h"
 #include "QueryResult.h"
 #include "ServiceState.h"
+#include "PullCallback.h"
+#include "PullRequest.h"
 #include "PullResult.h"
 #include "ConsumeMessageHook.h"
-#include "MixAll.h"
-#include "Logger.h"
-#include "DefaultMQPushConsumer.h"
-#include "ConsumerStatManage.h"
-#include "DefaultMQPullConsumer.h"
-#include "DefaultMQProducer.h"
-#include "MQClientFactory.h"
-#include "MQAdminImpl.h"
-#include "RebalancePushImpl.h"
-#include "MQClientAPIImpl.h"
-#include "OffsetStore.h"
-#include "MQClientManager.h"
-#include "LocalFileOffsetStore.h"
-#include "RemoteBrokerOffsetStore.h"
-#include "PullSysFlag.h"
-#include "FilterAPI.h"
-#include "PullAPIWrapper.h"
-#include "MQClientException.h"
-#include "Validators.h"
-#include "MessageListener.h"
-#include "PullMessageService.h"
-#include "ConsumeMessageOrderlyService.h"
-#include "ConsumeMessageConcurrentlyService.h"
-#include "KPRUtil.h"
-
+#include "TimerThread.h"
 
 class DefaultMQPushConsumer;
 class ConsumeMessageHook;
@@ -66,7 +43,6 @@ class PullRequest;
 class MQClientFactory;
 class PullAPIWrapper;
 class PullMessageService;
-class DefaultMQPushConsumerImplCallback;
 
 /**
 * Push方式的Consumer实现
@@ -76,6 +52,7 @@ class DefaultMQPushConsumerImpl : public  MQConsumerInner
 {
 public:
 	DefaultMQPushConsumerImpl(DefaultMQPushConsumer* pDefaultMQPushConsumer);
+    virtual ~DefaultMQPushConsumerImpl();
 	
 	void start();
 	void suspend();
@@ -98,6 +75,9 @@ public:
 	OffsetStore* getOffsetStore() ;
 	void setOffsetStore(OffsetStore* pOffsetStore);
 
+	void setTcpTimeoutMilliseconds(int milliseconds);
+	int getTcpTimeoutMilliseconds();
+
 	//MQConsumerInner
 	std::string groupName() ;
 	MessageModel messageModel() ;
@@ -107,10 +87,10 @@ public:
 	void doRebalance() ;
 	void persistConsumerOffset() ;
 	void updateTopicSubscribeInfo(const std::string& topic, const std::set<MessageQueue>& info);
-	std::map<std::string, SubscriptionData>& getSubscriptionInner() ;
+	//std::map<std::string, SubscriptionData>& getSubscriptionInner() ;
 	bool isSubscribeTopicNeedUpdate(const std::string& topic);
-
-	MessageExt viewMessage(const std::string& msgId);
+	//返回指针，需要由业务侧调用析构指针
+	MessageExt* viewMessage(const std::string& msgId);
 	QueryResult queryMessage(const std::string& topic,
 							 const std::string&  key,
 							 int maxNum,
@@ -130,27 +110,34 @@ public:
 	void setConsumeOrderly(bool consumeOrderly);
 	
 	RebalanceImpl* getRebalanceImpl() ;
+    PullAPIWrapper* getPullAPIWrapper();
 	MessageListener* getMessageListenerInner();
 	DefaultMQPushConsumer* getDefaultMQPushConsumer() ;
 	ConsumerStatManager* getConsumerStatManager();
+    ConsumeMessageService* getConsumeMessageService()
+    {
+        return m_pConsumeMessageService;
+    }
 
-private:
-	/**
-	* 通过Tag过滤时，会存在offset不准确的情况，需要纠正
-	*/
-	void correctTagsOffset(PullRequest& pullRequest) ;
-
-	void pullMessage(PullRequest* pPullRequest);
-
-	/**
+    /**
 	* 立刻执行这个PullRequest
 	*/
-	void executePullRequestImmediately(PullRequest* pullRequest);
+	void executePullRequestImmediately(PullRequest& pullRequest);
 
 	/**
 	* 稍后再执行这个PullRequest
 	*/
-	void executePullRequestLater(PullRequest* pullRequest, long timeDelay);
+	void executePullRequestLater(PullRequest& pullRequest, long timeDelay);
+    /**
+	* 通过Tag过滤时，会存在offset不准确的情况，需要纠正
+	*/
+	void correctTagsOffset(PullRequest& pullRequest) ;
+
+    void executeTaskLater(PullRequest& pullRequest, long timeDelay);
+    
+private:	
+
+	void pullMessage(PullRequest* pPullRequest);    
 
 	void makeSureStateOK();	
 	void checkConfig();
@@ -165,6 +152,9 @@ private:
 	static long long s_BrokerSuspendMaxTimeMillis;// 长轮询模式，Consumer连接在Broker挂起最长时间
 	static long long s_ConsumerTimeoutMillisWhenSuspend;// 长轮询模式，Consumer超时时间（必须要大于brokerSuspendMaxTimeMillis）
 	
+	//add by lin.qiongshan，2016-9-2，TCP 操作超时时间配置化
+	int m_tcpTimeoutMilliSeconds;
+
 	long long flowControlTimes1;
 	long long flowControlTimes2;
 	ServiceState m_serviceState;
@@ -180,29 +170,45 @@ private:
 	ConsumeMessageService* m_pConsumeMessageService;// 消费消息服务
 
 	std::list<ConsumeMessageHook*> m_hookList;//消费每条消息会回调
+
+    kpr::TimerThread_var m_pullLaterService;  
+
 	friend class PullMessageService;
 	friend class RebalancePushImpl;
-	friend class DefaultMQPushConsumerImplCallback;
+    friend class DefaultMQPushConsumerImplCallback;
 };
 
-#include "PullCallback.h"
-class MQException;
+
+class ExecutePullTaskLater : public kpr::TimerHandler
+{
+public:
+	ExecutePullTaskLater(PullRequest* pPullRequest,
+		DefaultMQPushConsumerImpl* pDefaultMQPushConsumerImpl);
+
+    void OnTimeOut(unsigned int timerID);
+private:
+	DefaultMQPushConsumerImpl* m_pDefaultMQPushConsumerImpl;
+    PullRequest* m_pPullRequest;
+
+};
 
 class DefaultMQPushConsumerImplCallback : public PullCallback
 {
 public:
 	DefaultMQPushConsumerImplCallback(SubscriptionData& subscriptionData,
 		DefaultMQPushConsumerImpl* pDefaultMQPushConsumerImpl,
-		PullRequest* pPullRequest);
+		PullRequest* pPullRequest, long long beginTimestamp);
 
 	void onSuccess(PullResult& pullResult);
 	void onException(MQException& e);
 
+
 private:
 	SubscriptionData m_subscriptionData;
 	DefaultMQPushConsumerImpl* m_pDefaultMQPushConsumerImpl;
-	PullRequest* m_pPullRequest;
-	std::chrono::system_clock::time_point m_beginTimestamp;
+    PullRequest* m_pPullRequest;
+    long long m_beginTimestamp;
 };
+
 
 #endif

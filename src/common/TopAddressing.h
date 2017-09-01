@@ -18,20 +18,6 @@
 
 #include <string>
 
-extern "C" {
-#include <curl/curl.h>
-}
-
-#include "MixAll.h"
-#include "Logger.h"
-
-class fetch_ns_exception : public std::exception {
-public:
-    virtual const char* what() const throw() {
-        return "Connection time";
-    }
-};
-
 /**
  * 寻址服务
  *
@@ -39,48 +25,18 @@ public:
 class TopAddressing
 {
 public:
-	TopAddressing()
-	{
-	}
+	//静态服务器地址：
+	//	1）先使用 setNsAddr 方法设置的地址 
+	//	2）如果没有设置静态服务器其地址，则尝试 DEFAULT_WS_ADDR ：一个固定的域名和地址（端口固定 8080），通过 host 配置域名实际指向的 IP 地址
+	//	3）如果请求 DEFAULT_WS_ADDR 还失败，则最后尝试请求 DEFAULT_LOCAL_WS_ADDR ：一个本地回环地址，固定端口 8080
+	static const std::string DEFAULT_WS_ADDR;
+	static const std::string DEFAULT_LOCAL_WS_ADDR;
 
-	static size_t curl_callback(char* data, size_t size, size_t nmemb, std::string *buffer) {
-		if (buffer != nullptr) {
-			buffer->append(data, size * nmemb);
-			return size * nmemb;
-		}
-		return 0;
-	}
+	TopAddressing();
 
-    std::string fetchNSAddr()
-    {
-        std::string ns_domain = MixAll::ROCKETMQ_NAMESRV_DOMAIN;
-        std::string name_server_discovery_end_point = ns_domain.append("/rocketmq/nsaddr");
-        return fetchNameServer(name_server_discovery_end_point, 3000);
-    }
+	~TopAddressing();
 
-	std::string fetchNameServer(std::string& domain, int timeout) throw (fetch_ns_exception)  {
-		CURL *curl;
-		CURLcode res;
-		std::string result = "";
-		curl = curl_easy_init();
-		curl_easy_setopt(curl, CURLOPT_URL, domain.c_str());
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_callback);
-		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result);
-		curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, timeout);
-		curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, timeout);
-
-		res = curl_easy_perform(curl);
-		curl_easy_cleanup(curl);
-
-		if (res != CURLE_OK) {
-			const char* errMsg = curl_easy_strerror(res);
-			Logger::get_logger()->error(errMsg);
-			fetch_ns_exception e;
-			throw e;
-		}
-		return result;
-	}
-
+	std::string fetchNSAddr();
 
 	const std::string& getNsAddr()
 	{
@@ -93,8 +49,23 @@ public:
 		m_nsAddr = nsAddr;
 	}
 
+	const std::string& getWsAddr()
+	{
+		return m_wsAddr;
+	}
+
+	void setWsAddr(const std::string& wsAddr)
+	{
+		m_wsAddr = wsAddr;
+	}
+
 private:
+	//向指定地址发起请求，并返回响应信息
+	int request(const std::string& url, std::string& response);
+
 	std::string m_nsAddr;
+
+	std::string m_wsAddr;	///< 用于请求 nameserver 地址的静态服务器地址
 };
 
 #endif

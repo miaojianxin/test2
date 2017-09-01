@@ -15,22 +15,18 @@
 */
 #include "SubscriptionData.h"
 
-#include <sstream>
-
-#include "KPRUtil.h"
-
 std::string SubscriptionData::SUB_ALL = "*";
 
 SubscriptionData::SubscriptionData()
 {
-	m_subVersion = GetCurrentTimeMillis();
+
 }
 
 SubscriptionData::SubscriptionData(const std::string& topic, const std::string& subString)
 	:m_topic(topic),
 	 m_subString(subString)
 {
-	m_subVersion = GetCurrentTimeMillis();
+
 }
 
 std::string SubscriptionData::getTopic()const
@@ -43,7 +39,7 @@ void SubscriptionData::setTopic(const std::string& topic)
 	m_topic = topic;
 }
 
-std::string SubscriptionData::getSubString()
+std::string SubscriptionData::getSubString()const
 {
 	return m_subString;
 }
@@ -53,7 +49,7 @@ void SubscriptionData::setSubString(const std::string& subString)
 	m_subString = subString;
 }
 
-std::set<std::string>& SubscriptionData::getTagsSet()
+const std::set<std::string>& SubscriptionData::getTagsSet()const
 {
 	return m_tagsSet;
 }
@@ -63,7 +59,7 @@ void SubscriptionData::setTagsSet(const std::set<std::string>& tagsSet)
 	m_tagsSet = tagsSet;
 }
 
-long long SubscriptionData::getSubVersion()
+long long SubscriptionData::getSubVersion()const
 {
 	return m_subVersion;
 }
@@ -73,7 +69,7 @@ void SubscriptionData::setSubVersion(long long subVersion)
 	m_subVersion = subVersion;
 }
 
-std::set<int>& SubscriptionData::getCodeSet()
+const std::set<int>& SubscriptionData::getCodeSet() const
 {
 	return m_codeSet;
 }
@@ -148,42 +144,15 @@ bool SubscriptionData::operator<(const SubscriptionData& other)const
 		return false;
 	}
 }
-
-void SubscriptionData::encode( std::string& outData )
+SubscriptionData& SubscriptionData::operator=(const SubscriptionData& other)
 {
-	std::stringstream ss;
-	std::stringstream ss1;
-
-	std::set<int>::iterator it1 = m_codeSet.begin();
-	for (;it1!=m_codeSet.end();it1++)
-	{
-		ss1<<*it1<<",";
-	}
-	
-	std::string codeSet=ss1.str();
-	if (!codeSet.empty())
-	{
-		codeSet.pop_back();
-	}
-
-	std::string tagsSet;
-
-	std::set<std::string>::iterator it = m_tagsSet.begin();
-	for (;it!=m_tagsSet.end();it++)
-	{
-		tagsSet+= "\""+*it+"\",";
-	}
-
-	if (!tagsSet.empty())
-	{
-		tagsSet.pop_back();
-	}
-
-	ss<<"{"<<"\"codeSet\":["<<codeSet<<"],"
-		<<"\"subString\":\""<<m_subString<<"\","
-		<<"\"subVersion\":"<<m_subVersion<<","
-		<<"\"tagsSet\":["<<tagsSet<<"],"
-		<<"\"topic\":\""<<m_topic<<"\"}";
-
-	outData = ss.str();
+    if(this != &other)
+    {
+     	m_topic = other.m_topic;
+    	m_subString = other.m_subString;
+    	m_tagsSet = other.m_tagsSet;
+    	m_codeSet = other.m_codeSet;
+    	m_subVersion = other.m_subVersion;       
+    }
+    return *this;
 }

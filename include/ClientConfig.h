@@ -40,6 +40,11 @@ public:
 	std::string getNamesrvAddr();
 	void setNamesrvAddr(const std::string& namesrvAddr);
 
+	//mjx namesrv,onsaddr modify
+	std::string getNSAddr();
+	void setNSAddr(const std::string& onsAddr);
+
+
 	std::string getClientIP();
 	void setClientIP(const std::string& clientIP);
 
@@ -49,9 +54,8 @@ public:
 	int getClientCallbackExecutorThreads();
 	void setClientCallbackExecutorThreads(int clientCallbackExecutorThreads);
 
-	int getPollNameServerInterval();
-
-	void setPollNameServerInterval(int pollNameServerInterval);
+	int getPollNameServerInteval();
+	void setPollNameServerInteval(int pollNameServerInteval);
 
 	int getHeartbeatBrokerInterval();
 	void setHeartbeatBrokerInterval(int heartbeatBrokerInterval);
@@ -59,15 +63,31 @@ public:
 	int getPersistConsumerOffsetInterval();
 	void setPersistConsumerOffsetInterval(int persistConsumerOffsetInterval);
 
+    int getLogLevel();
+    void setLogLevel(int iLevel);
+    
+	//如果 InstanceName 是默认值（"DEFAULT"），则将 InstanceName 替换为 pid。这是为了在同主机多个进程启动客户端实例时，避免 clientId 重复
+	void changeInstanceNameToPID();
+
+    /* modified by yu.guangjie at 2017-06-23, reason: */
+    std::string getAccessKey();
+	void setAccessKey(const std::string& accessKey);
+    std::string getSecretKey();
+	void setSecretKey(const std::string& secretKey);
+    
 private:
 	int m_clientCallbackExecutorThreads;
-	int m_pollNameServerInterval;
+	int m_pollNameServerInteval;
 	int m_heartbeatBrokerInterval;
 	int m_persistConsumerOffsetInterval;
 	std::string m_namesrvAddr;
+	//mjx namesrv,onsaddr modify
+	std::string m_onsAddr;
+	
 	std::string m_clientIP;
 	std::string m_instanceName;
-	static const std::string CLIENT_ID_IP_NAME_SEPARATOR;
+    std::string m_accessKey;
+    std::string m_secretKey;
 };
 
 #endif

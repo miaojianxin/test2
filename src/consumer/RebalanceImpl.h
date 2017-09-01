@@ -20,13 +20,12 @@
 #include <string>
 #include <set>
 #include <list>
-
+#include <vector>
 #include "ConsumeType.h"
 #include "MessageQueue.h"
 #include "ProcessQueue.h"
 #include "PullRequest.h"
 #include "SubscriptionData.h"
-#include "Logger.h"
 
 class AllocateMessageQueueStrategy;
 class MQClientFactory;
@@ -59,7 +58,11 @@ public:
 
 	void doRebalance();
 
-	std::map<std::string, SubscriptionData>& getSubscriptionInner();
+	std::map<std::string, SubscriptionData> getSubscriptionInner();
+    void subscribe(std::string topic, SubscriptionData& subData);
+    void unsubscribe(std::string topic);
+    bool hasSubscribe(std::string topic, SubscriptionData *psubData=NULL);
+    
 	std::map<MessageQueue, ProcessQueue*>& getProcessQueueTable();
 	std::map<std::string, std::set<MessageQueue> >& getTopicSubscribeInfoTable();
 
@@ -74,6 +77,7 @@ public:
 	
 	MQClientFactory* getmQClientFactory();
 	void setmQClientFactory(MQClientFactory* pMQClientFactory);
+    void removeProcessQueue(MessageQueue& mq);
 
 private:
 	std::map<std::string, std::set<MessageQueue> > buildProcessQueueTableByBrokerName();
@@ -84,20 +88,25 @@ private:
 protected:
 	// 分配好的队列，消息存储也在这里
 	std::map<MessageQueue, ProcessQueue*> m_processQueueTable;
-	kpr::Mutex m_processQueueTableLock;
 
+	//mjx modify add
+	//broker name+ master ip
+	std::map<std::string, std::string> m_brokerMaster;
+	//down broker name
+	std::vector<std::string> m_downBrokerName;
+	
 	// 可以订阅的所有队列（定时从Name Server更新最新版本）
 	std::map<std::string, std::set<MessageQueue> > m_topicSubscribeInfoTable;
-	kpr::Mutex m_topicSubscribeInfoTableLock;
-
-	// 订阅关系，用户配置的原始数据 key <topic> value <SubscriptionData>
-	std::map<std::string, SubscriptionData> m_subscriptionInner;
-	kpr::Mutex m_subscriptionInnerLock;
-
+	// 订阅关系，用户配置的原始数据
+	std::map<std::string /* topic */, SubscriptionData> m_subscriptionInner;
+    kpr::Mutex m_subsMutex; /* added by yu.guangjie at 2015-08-20 */
+    
 	std::string m_consumerGroup;
 	MessageModel m_messageModel;
 	AllocateMessageQueueStrategy* m_pAllocateMessageQueueStrategy;
 	MQClientFactory* m_pMQClientFactory;
+
+    
 };
 
 #endif

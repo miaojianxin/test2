@@ -31,6 +31,7 @@ public:
 		subscriptionData->setTopic(topic);
 		subscriptionData->setSubString(subString);
 
+        MqLogDebug("Subscription topic[%s],substring[%s]",topic.c_str(), subString.c_str());
 		if (subString.empty() || subString == SubscriptionData::SUB_ALL)
 		{
 			subscriptionData->setSubString(SubscriptionData::SUB_ALL);
@@ -55,8 +56,10 @@ public:
 
 					if (!trimString.empty())
 					{
-						subscriptionData->getTagsSet().insert(trimString);
-						subscriptionData->getCodeSet().insert(UtilAll::stringHashCode(trimString.c_str(),trimString.length()));
+						subscriptionData->m_tagsSet.insert(trimString);
+                        /* modified by yu.guangjie at 2015-08-18, reason: add codeset*/
+                        subscriptionData->m_codeSet.insert(
+                            UtilAll::hashCode(trimString.c_str(), trimString.length()));
 					}
 				}
 			}

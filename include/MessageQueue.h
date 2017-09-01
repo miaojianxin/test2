@@ -40,8 +40,6 @@ public:
 	int getQueueId()const;
 	void setQueueId(int queueId);
 
-	std::string toString();
-
 	int hashCode();
 
 	bool operator==(const MessageQueue& mq)const;

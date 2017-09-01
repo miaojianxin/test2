@@ -40,6 +40,7 @@ class ROCKETMQCLIENT_API DefaultMQProducer : public ClientConfig ,public MQProdu
 public:
 	DefaultMQProducer();
 	DefaultMQProducer(const std::string& producerGroup);
+    virtual ~DefaultMQProducer();
 
 	//begin MQProducer
 	void start();
@@ -67,7 +68,8 @@ public:
 	long long maxOffset(const MessageQueue& mq);
 	long long minOffset(const MessageQueue& mq);
 	long long earliestMsgStoreTime(const MessageQueue& mq);
-	MessageExt viewMessage(const std::string& msgId) ;
+	// 返回指针，需要由业务侧调用析构指针
+	MessageExt* viewMessage(const std::string& msgId) ;
 	QueryResult queryMessage(const std::string& topic,
 							 const std::string& key,
 							 int maxNum,
@@ -100,6 +102,9 @@ public:
 
 	DefaultMQProducerImpl* getDefaultMQProducerImpl();
 
+	//add by lin.qiongshan, 2016-9-2， TCP 超时配置化
+	void setTcpTimeoutMilliseconds(int milliseconds);
+	int getTcpTimeoutMilliseconds();
 protected:
 	DefaultMQProducerImpl* m_pDefaultMQProducerImpl;
 
@@ -107,7 +112,7 @@ private:
 	int m_defaultTopicQueueNums;///< 发送消息，自动创建Topic时，默认队列数
 	int m_sendMsgTimeout;///< 发送消息超时，不建议修改
 	int m_compressMsgBodyOverHowmuch;///< Message Body大小超过阀值，则压缩
-	int m_maxMessageSize;///< 最大消息大小，默认512K
+	int m_maxMessageSize;///< 最大消息大小，默认128K
 
 	std::string m_producerGroup;///< 一般发送同样消息的Producer，归为同一个Group，应用必须设置，并保证命名唯一
 	std::string m_createTopicKey;///< 支持在发送消息时，如果Topic不存在，自动创建Topic，但是要指定Key

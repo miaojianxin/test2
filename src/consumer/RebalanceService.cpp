@@ -16,6 +16,7 @@
 
 #include "RebalanceService.h"
 #include "MQClientFactory.h"
+#include "UtilAll.h"
 
 long RebalanceService::s_WaitInterval = 1000 * 10;
 

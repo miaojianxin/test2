@@ -103,13 +103,13 @@ public:
 	* 根据消息ID，从服务器获取完整的消息
 	*
 	* @param msgId
-	* @return 完整消息
+	* @return 返回指针，需要由业务侧调用析构指针
 	* @throws InterruptedException
 	* @throws MQBrokerException
 	* @throws RemotingException
 	* @throws MQClientException
 	*/
-	virtual MessageExt viewMessage(const std::string& msgId)=0;
+	virtual MessageExt* viewMessage(const std::string& msgId)=0;
 
 	/**
 	* 根据消息Key查询消息

@@ -15,18 +15,18 @@
 #include <PullResult.h>
 #include <MQClientException.h>
 
-std::map<MessageQueue, long long> offsetTable;
+std::map<MessageQueue, long long> offseTable;
 
 void putMessageQueueOffset(const MessageQueue& mq, long long offset)
 {
-	offsetTable[mq]=offset;
+	offseTable[mq]=offset;
 }
 
 long long getMessageQueueOffset(const MessageQueue& mq) 
 {
-	std::map<MessageQueue, long long>::iterator it = offsetTable.find(mq);
+	std::map<MessageQueue, long long>::iterator it = offseTable.find(mq);
 
-	if (it != offsetTable.end())
+	if (it!=offseTable.end())
 	{
 		return it->second;
 	}
@@ -55,13 +55,14 @@ void PrintResult(PullResult& result)
 
 int main(int argc, char* argv[])
 {
-	DefaultMQPullConsumer consumer("CG_Cpp_Pull");
-	if (argc >=2 ) {
+	if (argc<2)
+	{
 		printf("Usage:%s ip:port\n",argv[0]);
-		consumer.setNamesrvAddr(argv[1]);
-	} else {
-		printf("Using server name auto config service.");
+		return 0;
 	}
+
+	DefaultMQPullConsumer consumer("MyConsumerGroup");
+	consumer.setNamesrvAddr(argv[1]);
 	consumer.start();
 
 	std::set<MessageQueue>* mqs = consumer.fetchSubscribeMessageQueues("TopicTest");
@@ -76,13 +77,13 @@ int main(int argc, char* argv[])
 		{
 			try
 			{
-				PullResult* pullResult = consumer.pullBlockIfNotFound(mq, "", getMessageQueueOffset(*it), 32);
+				PullResult* pullResult = consumer.pullBlockIfNotFound(mq, "", getMessageQueueOffset(*it), 10);
 				PrintResult(*pullResult);
 				putMessageQueueOffset(mq, pullResult->nextBeginOffset);
 				switch (pullResult->pullStatus)
 				{
 				case FOUND:
-					// TODO
+					// 
 					break;
 				case NO_MATCHED_MSG:
 					break;
